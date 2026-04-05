@@ -1660,7 +1660,9 @@ function evaluateExam() {
       let correctData = { answer: '', keywords: '', correct: '' };
       try {
         if (q._r) {
-          correctData = JSON.parse(decodeURIComponent(atob(q._r)));
+          const decoded = JSON.parse(decodeURIComponent(atob(q._r)));
+          // Merge para no perder campos por defecto si el JSON es de versión anterior
+          correctData = { ...correctData, ...decoded };
         }
       } catch(e) {
         console.warn(`[EVAL] Error decodificando respuesta de pregunta ${idx + 1}:`, e);
@@ -2397,7 +2399,7 @@ function evaluateKeywords(studentAnswer, keywordsStr, correctAnswer) {
     }
 
     // Extraer palabras significativas de la respuesta correcta (más de 4 letras)
-    const correctWords = correctNorm.split(' ').filter(w => w.length > 4);
+    const correctWords = correctNorm.split(' ').filter(w => w.length > 2);
 
     if (correctWords.length === 0) {
       return { percentage: 0, feedback: 'Sin criterio de evaluación definido', matches: [] };

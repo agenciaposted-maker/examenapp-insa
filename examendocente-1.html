@@ -478,6 +478,8 @@ function parseQuestions() {
       keywords: q.keywords || autoKeywords(q.answer || ''),
       points: q.points || 1,
       type: q.type || detectType(q.text, q.options && q.options.length >= 2),
+      options: q.options || [],
+      correct: q.correct || '',
     }))
     .filter(q => q.text.length > 4);
 
@@ -1073,8 +1075,11 @@ function renderQCard(q, i, typeLabels) {
 }
 
 function setOpt(qi, oi, letter, val) {
-  if (!S.questions[qi].options) S.questions[qi].options = [];
-  S.questions[qi].options[oi] = { letter, text: val };
+  const q = S.questions[qi];
+  if (!q.options) q.options = [];
+  // Rellenar posiciones vacías para evitar array sparse
+  while (q.options.length <= oi) q.options.push({ letter: ['A','B','C','D'][q.options.length] || '', text: '' });
+  q.options[oi] = { letter, text: val };
 }
 
 function renderQList() {
@@ -1087,7 +1092,7 @@ function renderQList() {
 
 function updateSummary() {
   const pts = S.questions.reduce((a,q)=>a+(q.points||1),0);
-  const withAns = S.questions.filter(q=>q.answer.trim()).length;
+  const withAns = S.questions.filter(q=>(q.answer||'').trim()).length;
   const vs = document.querySelectorAll('.summary-val');
   if (vs[0]) vs[0].textContent = S.questions.length;
   if (vs[1]) vs[1].textContent = pts;
@@ -1095,7 +1100,7 @@ function updateSummary() {
 }
 
 function addQuestion() {
-  S.questions.push({ id: S.questions.length, text:'', type:'open', answer:'', keywords:'', points:1 });
+  S.questions.push({ id: S.questions.length, text:'', type:'open', answer:'', keywords:'', points:1, options:[], correct:'' });
   renderQList();
   window.scrollTo(0, document.body.scrollHeight);
 }
