@@ -1141,7 +1141,7 @@ function render() {
   document.getElementById('app').innerHTML = screens[S.phase] ? screens[S.phase]() : '';
 
   // Activar/desactivar modo examen en el body (para CSS anti-trampa)
-  if (S.phase === 'exam') {
+  if (S.phase === 'exam' || S.phase === 'info') {
     document.body.classList.add('exam-active');
   } else {
     document.body.classList.remove('exam-active');
