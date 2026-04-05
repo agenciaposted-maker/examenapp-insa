@@ -1,0 +1,17 @@
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Configuración local de Claude
+.claude/
+
+# Archivos de exámenes generados (sensibles)
+examen-*.json
+resultado_*.html
+
+# Node modules (si se agregan en el futuro)
+node_modules/
+
+# Logs
+*.log

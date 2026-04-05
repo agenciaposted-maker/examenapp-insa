@@ -1,0 +1,23 @@
+{
+  "name": "ExamenApp - Evaluador Digital INSA",
+  "short_name": "ExamenApp",
+  "description": "Sistema de evaluacion digital para examenes - Centro Escolar INSA",
+  "start_url": "./examenalumno.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "categories": ["education", "productivity"],
+  "lang": "es",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [],
+  "related_applications": [],
+  "prefer_related_applications": false
+}
