@@ -426,30 +426,48 @@ function parseQuestions() {
   // Preprocesar: unir líneas fragmentadas
   const lines = typeof preprocessLines === 'function' ? preprocessLines(rawLines) : rawLines;
 
-  let questions = [];
+  // ── Ejecutar TODAS las estrategias en paralelo ──
+  const strategyResults = [
+    parseTableFormat(lines),         // E1: tabla estructurada
+    parseEjercicioFormat(lines),     // E2: Consigna/Respuesta
+    parseStandardNumbered(lines),    // E3: numerado estándar
+    parsePreguntaLabel(lines),       // E4: "Pregunta N:"
+    parseQuestionWithOptions(lines), // E5: verbos imperativos + opciones
+    parseFallback(lines),            // E6: cualquier "?"
+  ];
 
-  // ── Estrategia 1: Formato tabla (número solo | Pregunta: | R | respuesta)
-  questions = parseTableFormat(lines);
+  // Estrategia que sola encontró más preguntas
+  const bestSingle = strategyResults.reduce((best, r) => r.length > best.length ? r : best, []);
 
-  // ── Estrategia 2: Ejercicio / Consigna / Respuesta
-  if (questions.length === 0)
-    questions = parseEjercicioFormat(lines);
+  // Normalizar texto para comparar duplicados entre estrategias
+  const normKey = s => (s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim().substring(0, 40);
 
-  // ── Estrategia 3: Numerado estándar (1. / 1) / 1- / 1.-) con R: o Respuesta: embebida
-  if (questions.length === 0)
-    questions = parseStandardNumbered(lines);
+  // Combinar todas las estrategias eliminando duplicados
+  const seen = new Set();
+  const merged = [];
+  for (const results of strategyResults) {
+    for (const q of results) {
+      const key = normKey(q.text);
+      if (key.length > 4 && !seen.has(key)) {
+        seen.add(key);
+        merged.push(q);
+      }
+    }
+  }
 
-  // ── Estrategia 4: "Pregunta N:" como label
-  if (questions.length === 0)
-    questions = parsePreguntaLabel(lines);
+  // Ordenar preguntas combinadas por su posición real en el documento
+  const getDocPos = q => {
+    const prefix = normKey(q.text).substring(0, 20);
+    const idx = lines.findIndex(l => normKey(l).includes(prefix));
+    return idx >= 0 ? idx : 9999;
+  };
+  merged.sort((a, b) => getDocPos(a) - getDocPos(b));
 
-  // ── Estrategia 5: Preguntas sin número con opciones a), b), c), d)
-  if (questions.length === 0)
-    questions = parseQuestionWithOptions(lines);
-
-  // ── Estrategia 6: Fallback mejorado
-  if (questions.length === 0)
-    questions = parseFallback(lines);
+  // Usar la combinación solo si aporta más del 10% de preguntas adicionales
+  // (evita ruido cuando todas las estrategias encuentran las mismas preguntas)
+  let questions = merged.length > bestSingle.length * 1.1 ? merged : bestSingle;
 
   // ── Post-procesamiento: detectar tipos de las que quedaron sin opciones
   questions = questions.map(q => {
