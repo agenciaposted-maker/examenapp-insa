@@ -981,7 +981,7 @@ function screenQuestions() {
   <div class="summary-grid">
     <div class="summary-box"><div class="summary-val">${S.questions.length}</div><div class="summary-label">Preguntas</div></div>
     <div class="summary-box"><div class="summary-val">${S.questions.reduce((a,q)=>a+(q.points||1),0)}</div><div class="summary-label">Puntos totales</div></div>
-    <div class="summary-box"><div class="summary-val">${S.questions.filter(q=>q.answer.trim()).length}</div><div class="summary-label">Con respuesta</div></div>
+    <div class="summary-box"><div class="summary-val">${S.questions.filter(q=>(q.answer||'').trim()).length}</div><div class="summary-label">Con respuesta</div></div>
   </div>` : ''}
 
   <div class="tip">
@@ -1143,7 +1143,7 @@ function validateAndNext() {
   if (bad) { toast('Todas las preguntas deben tener enunciado','error'); return; }
   // Tipos que no requieren respuesta en texto (tienen su propia lógica)
   const specialTypes = ['multiple', 'vf', 'match', 'order'];
-  const noAns = S.questions.filter(q => !q.answer.trim() && !specialTypes.includes(q.type));
+  const noAns = S.questions.filter(q => !(q.answer||'').trim() && !specialTypes.includes(q.type));
   if (noAns.length > 0) {
     if (!confirm(`${noAns.length} pregunta(s) no tienen respuesta correcta. ¿Continuar de todas formas?`)) return;
   }

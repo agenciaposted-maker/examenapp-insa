@@ -1272,6 +1272,8 @@ async function loadExamFile(input) {
         } else if (SECURITY.requireFullscreen) {
           document.getElementById('fullscreenPrompt').classList.remove('hidden');
         }
+        // Reiniciar el timer y auto-guardado al recuperar examen en progreso
+        startTimer();
       } else {
         S.phase = 'info';
       }
