@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Formato Examen INSA — Preview</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Times New Roman', Times, serif; background: #e0e0e0; padding: 2rem; }
+
+  .page {
+    background: white;
+    width: 216mm;
+    min-height: 279mm;
+    margin: 0 auto;
+    padding: 18mm 20mm;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  }
+
+  /* ENCABEZADO */
+  .header {
+    display: flex;
+    align-items: center;
+    border-bottom: 2.5px solid black;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    gap: 12px;
+  }
+  .header-left { flex: 1; }
+  .school-name {
+    font-size: 13pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+  }
+  .school-sub {
+    font-size: 8.5pt;
+    color: #333;
+    margin-bottom: 8px;
+  }
+  .header-fields { font-size: 9pt; line-height: 2; }
+  .field-row { display: flex; gap: 1.5rem; }
+  .field { display: flex; align-items: baseline; gap: 4px; }
+  .field-label { font-weight: bold; white-space: nowrap; }
+  .field-line { border-bottom: 1px solid black; min-width: 120px; flex: 1; }
+  .field-line-sm { border-bottom: 1px solid black; min-width: 60px; }
+
+  .header-logo { flex-shrink: 0; }
+  .header-logo img { width: 72px; height: 72px; object-fit: contain; }
+
+  /* TÍTULO EXAMEN */
+  .exam-title {
+    text-align: center;
+    font-size: 11pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+    border: 1px solid black;
+    padding: 4px 0;
+  }
+
+  /* PUNTAJE */
+  .score-bar {
+    display: flex;
+    justify-content: flex-end;
+    font-size: 9pt;
+    margin-bottom: 10px;
+    gap: 1.5rem;
+  }
+  .score-box {
+    border: 1px solid black;
+    padding: 3px 10px;
+    font-size: 9pt;
+  }
+
+  /* INDICACIONES */
+  .section-title {
+    font-size: 10pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    border-bottom: 1.5px solid black;
+    margin-bottom: 6px;
+    padding-bottom: 2px;
+    letter-spacing: 0.05em;
+  }
+  .indicaciones {
+    font-size: 9pt;
+    line-height: 1.7;
+    margin-bottom: 14px;
+    text-align: justify;
+  }
+
+  /* PREGUNTAS */
+  .section { margin-bottom: 16px; }
+  .q-section-title {
+    font-size: 10pt;
+    font-weight: bold;
+    background: black;
+    color: white;
+    padding: 3px 8px;
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+  }
+  .question { font-size: 9.5pt; line-height: 1.6; margin-bottom: 10px; }
+  .question-num { font-weight: bold; }
+  .answer-lines { margin-top: 4px; }
+  .answer-line {
+    border-bottom: 1px solid #555;
+    height: 18px;
+    margin-bottom: 4px;
+  }
+
+  /* FIRMA */
+  .footer {
+    margin-top: 24px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 9pt;
+  }
+  .firma { text-align: center; min-width: 140px; }
+  .firma-line { border-top: 1px solid black; margin-bottom: 3px; }
+
+  @media print {
+    body { background: white; padding: 0; }
+    .page { box-shadow: none; width: 100%; padding: 15mm 18mm; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ENCABEZADO -->
+  <div class="header">
+    <div class="header-left">
+      <div class="school-name">Centro Escolar INSA</div>
+      <div class="school-sub">Santa Ana, El Salvador · Turno Vespertino</div>
+      <div class="header-fields">
+        <div class="field-row">
+          <div class="field">
+            <span class="field-label">Nombre:</span>
+            <span class="field-line"></span>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <span class="field-label">Grado:</span>
+            <span class="field-line-sm"></span>
+          </div>
+          <div class="field">
+            <span class="field-label">Sección:</span>
+            <span class="field-line-sm"></span>
+          </div>
+          <div class="field">
+            <span class="field-label">Fecha:</span>
+            <span class="field-line-sm"></span>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <span class="field-label">Docente:</span>
+            <span class="field-line"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="header-logo">
+      <img src="326733806_1665313713871232_6447987998156820131_n.jpg" alt="Logo INSA">
+    </div>
+  </div>
+
+  <!-- TÍTULO -->
+  <div class="exam-title">Evaluación Sumativa · Lenguaje y Literatura</div>
+
+  <!-- PUNTAJE -->
+  <div class="score-bar">
+    <span class="score-box">Puntaje obtenido: _______</span>
+    <span class="score-box">Nota: _______</span>
+  </div>
+
+  <!-- INDICACIONES -->
+  <div class="section">
+    <div class="section-title">Indicaciones generales</div>
+    <div class="indicaciones">
+      Lea detenidamente cada pregunta antes de responder. Responda con letra clara y ordenada.
+      No se permite el uso de ningún medio electrónico durante la evaluación. Cualquier intento
+      de deshonestidad académica anulará automáticamente su examen. El tiempo máximo para
+      resolver esta evaluación es de <strong>45 minutos</strong>.
+    </div>
+  </div>
+
+  <!-- SECCIÓN I -->
+  <div class="section">
+    <div class="q-section-title">Sección I — Desarrollo (4 puntos c/u)</div>
+
+    <div class="question">
+      <span class="question-num">1.</span> ¿Qué es el Modernismo literario y cuáles son sus principales características?
+      <div class="answer-lines">
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+      </div>
+    </div>
+
+    <div class="question">
+      <span class="question-num">2.</span> Explique la importancia de Rubén Darío en la literatura hispanoamericana.
+      <div class="answer-lines">
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+        <div class="answer-line"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECCIÓN II -->
+  <div class="section">
+    <div class="q-section-title">Sección II — Completar (2 puntos c/u)</div>
+
+    <div class="question">
+      <span class="question-num">3.</span> El Modernismo surgió a finales del siglo ____________ en ____________.
+    </div>
+    <div class="question">
+      <span class="question-num">4.</span> La obra más representativa de Rubén Darío es ____________________________________________.
+    </div>
+  </div>
+
+  <!-- FIRMA -->
+  <div class="footer">
+    <div class="firma">
+      <div class="firma-line"></div>
+      <div>Firma del docente</div>
+    </div>
+    <div class="firma">
+      <div class="firma-line"></div>
+      <div>Firma del alumno/a</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
