@@ -1233,7 +1233,7 @@ async function loadExamFile(input) {
     if (parsed.questions.length === 0) {
       throw new Error('El examen no tiene preguntas');
     }
-    if (!parsed.pwHash || !parsed.pwSalt) {
+    if (!parsed.pwHash) {
       throw new Error('Falta la contraseña de seguridad del examen');
     }
 
@@ -1688,19 +1688,47 @@ function evaluateExam() {
             feedback = `Incorrecto. Respuesta correcta: ${correctData.correct}`;
           }
         } else if (q.type === 'vf') {
-          // Verdadero/Falso
+          // Verdadero/Falso — normalizar múltiples formas de respuesta
+          const normVF = s => {
+            const t = (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+            if (/^(v|verdadero|verdad|cierto|correcto|si|true|yes|1)$/.test(t)) return 'verdadero';
+            if (/^(f|falso|mentira|incorrecto|no|false|0)$/.test(t)) return 'falso';
+            return t;
+          };
           if (!studentAnswer || !correctData.answer) {
             score = 0;
             feedback = !studentAnswer ? 'Sin respuesta' : 'Pregunta sin respuesta correcta definida';
-          } else if (studentAnswer.toLowerCase() === correctData.answer.toLowerCase()) {
+          } else if (normVF(studentAnswer) === normVF(correctData.answer)) {
             score = q.points || 1;
             feedback = 'Correcto';
           } else {
             score = 0;
             feedback = `Incorrecto. Respuesta correcta: ${correctData.answer}`;
           }
+        } else if (q.type === 'numeric') {
+          // Numérico: intentar comparación numérica primero, luego keywords
+          const numResult = evaluateNumeric(studentAnswer, correctData.answer);
+          if (numResult !== null) {
+            score = Math.round((numResult / 100) * (q.points || 1) * 10) / 10;
+            feedback = numResult === 100 ? 'Correcto' : numResult > 0 ? 'Aproximado (dentro del margen)' : `Incorrecto. Respuesta correcta: ${correctData.answer}`;
+          } else {
+            // Si no hay números detectables, evaluar por keywords
+            const evaluation = evaluateKeywords(studentAnswer, correctData.keywords, correctData.answer);
+            score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+            feedback = evaluation.feedback;
+          }
+        } else if (q.type === 'match') {
+          // Relacionar columnas: evaluar pares
+          const evaluation = evaluateMatch(studentAnswer, correctData.answer, correctData.keywords);
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+          feedback = evaluation.feedback;
+        } else if (q.type === 'order') {
+          // Ordenar: evaluar secuencia
+          const evaluation = evaluateOrder(studentAnswer, correctData.answer);
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+          feedback = evaluation.feedback;
         } else {
-          // Desarrollo/Completar/Cálculo: evaluar por palabras clave
+          // Desarrollo/Completar: evaluar por palabras clave con ponderación
           const evaluation = evaluateKeywords(studentAnswer, correctData.keywords, correctData.answer);
           score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
           feedback = evaluation.feedback;
@@ -2208,30 +2236,33 @@ function stemSpanish(word) {
 
   let stem = word;
 
+  // Sufijos nominales/adjetivales (aplicar primero, del más largo al más corto)
+  const nominalSuffixes = [
+    'amiento', 'imiento', 'mente', 'cion', 'sion', 'idad', 'edad',
+    'encia', 'ancia', 'ismo', 'ista', 'oso', 'osa', 'ivo', 'iva',
+    'able', 'ible', 'ador', 'edor', 'idor', 'iente', 'ante', 'ente',
+    'ura', 'ero', 'era', 'ico', 'ica', 'al', 'il'
+  ];
+
   // Sufijos verbales (conjugaciones)
   const verbalSuffixes = [
-    'ando', 'iendo', 'aron', 'ieron', 'aban', 'ian', 'aste', 'iste',
-    'amos', 'emos', 'imos', 'aron', 'eron', 'aria', 'eria', 'iria',
-    'aba', 'ia', 'ara', 'iera', 'ase', 'iese', 'ado', 'ido', 'ar', 'er', 'ir'
+    'iendo', 'ando', 'ieron', 'aron', 'aban', 'aste', 'iste',
+    'amos', 'emos', 'imos', 'eron', 'aria', 'eria', 'iria',
+    'aba', 'ara', 'iera', 'ase', 'iese', 'ado', 'ido', 'ar', 'er', 'ir'
   ];
-
-  // Sufijos nominales/adjetivales
-  const nominalSuffixes = [
-    'mente', 'cion', 'sion', 'idad', 'edad', 'amiento', 'imiento',
-    'encia', 'ancia', 'ismo', 'ista', 'oso', 'osa', 'ivo', 'iva',
-    'able', 'ible', 'ador', 'edor', 'idor', 'ante', 'ente', 'iente',
-    'ura', 'era', 'ero', 'eria', 'ico', 'ica', 'al', 'il'
-  ];
-
-  // Plurales
-  if (stem.endsWith('es') && stem.length > 4) {
-    stem = stem.slice(0, -2);
-  } else if (stem.endsWith('s') && stem.length > 4) {
-    stem = stem.slice(0, -1);
-  }
 
   // Diminutivos/aumentativos
-  const dimAumSuffixes = ['ito', 'ita', 'illo', 'illa', 'ote', 'ota', 'azo', 'aza'];
+  const dimAumSuffixes = ['illo', 'illa', 'ito', 'ita', 'ote', 'ota', 'azo', 'aza'];
+
+  // Nominal primero
+  for (const suf of nominalSuffixes) {
+    if (stem.endsWith(suf) && stem.length > suf.length + 3) {
+      stem = stem.slice(0, -suf.length);
+      break;
+    }
+  }
+
+  // Diminutivos
   for (const suf of dimAumSuffixes) {
     if (stem.endsWith(suf) && stem.length > suf.length + 3) {
       stem = stem.slice(0, -suf.length);
@@ -2239,7 +2270,7 @@ function stemSpanish(word) {
     }
   }
 
-  // Sufijos verbales (quitar del más largo al más corto)
+  // Verbal
   for (const suf of verbalSuffixes) {
     if (stem.endsWith(suf) && stem.length > suf.length + 2) {
       stem = stem.slice(0, -suf.length);
@@ -2247,11 +2278,13 @@ function stemSpanish(word) {
     }
   }
 
-  // Sufijos nominales
-  for (const suf of nominalSuffixes) {
-    if (stem.endsWith(suf) && stem.length > suf.length + 2) {
-      stem = stem.slice(0, -suf.length);
-      break;
+  // Plural al final y solo si no es palabra griega/latina en -is/-us/-os
+  const isInvariant = /[aeiou][sx]$|sis$|lis$|tis$|bis$|xis$/.test(stem);
+  if (!isInvariant) {
+    if (stem.endsWith('es') && stem.length > 5) {
+      stem = stem.slice(0, -2);
+    } else if (stem.endsWith('s') && stem.length > 4) {
+      stem = stem.slice(0, -1);
     }
   }
 
@@ -2363,6 +2396,125 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
   }
 
   return { found: false };
+}
+
+// ═══════════════════════════════════════
+// EVALUACIÓN NUMÉRICA
+// ═══════════════════════════════════════
+function evaluateNumeric(studentAnswer, correctAnswer) {
+  // Extraer números de ambas respuestas (soporta decimales con . o ,)
+  const extractNumber = s => {
+    if (!s) return null;
+    const cleaned = (s + '').replace(',', '.').replace(/[^\d.\-]/g, ' ').trim();
+    const match = cleaned.match(/-?\d+\.?\d*/);
+    return match ? parseFloat(match[0]) : null;
+  };
+
+  const correct = extractNumber(correctAnswer);
+  const student = extractNumber(studentAnswer);
+
+  if (correct === null || student === null) return null;
+
+  if (student === correct) return 100;
+
+  // Margen de tolerancia del 2%
+  const tolerance = Math.abs(correct) * 0.02;
+  if (tolerance > 0 && Math.abs(student - correct) <= tolerance) return 50;
+
+  return 0;
+}
+
+// ═══════════════════════════════════════
+// EVALUACIÓN DE RELACIONAR COLUMNAS
+// ═══════════════════════════════════════
+function evaluateMatch(studentAnswer, correctAnswer, keywordsStr) {
+  if (!studentAnswer || studentAnswer.trim().length < 2) {
+    return { percentage: 0, feedback: 'Sin respuesta' };
+  }
+
+  // Si no hay respuesta correcta definida, caer en keywords
+  if (!correctAnswer || correctAnswer.trim().length < 2) {
+    const kEval = evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
+    return kEval;
+  }
+
+  // Normalizar: quitar acentos, minúsculas, colapsar espacios
+  const norm = s => (s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ').trim();
+
+  // Separar pares de la respuesta correcta por salto de línea o punto y coma
+  const correctPairs = correctAnswer.split(/[\n;]+/).map(p => norm(p)).filter(Boolean);
+  if (correctPairs.length === 0) {
+    return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
+  }
+
+  const studentNorm = norm(studentAnswer);
+  let matched = 0;
+  for (const pair of correctPairs) {
+    // Buscar si el alumno mencionó ambos elementos del par
+    const parts = pair.split(/[-–:=]/).map(p => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      const a = parts[0], b = parts[parts.length - 1];
+      if (studentNorm.includes(a) && studentNorm.includes(b)) matched++;
+    } else if (studentNorm.includes(pair)) {
+      matched++;
+    }
+  }
+
+  const percentage = Math.round((matched / correctPairs.length) * 100);
+  const feedback = percentage === 100
+    ? 'Correcto'
+    : percentage > 0
+      ? `Parcial: ${matched} de ${correctPairs.length} pares correctos`
+      : `Incorrecto. Respuesta correcta: ${correctAnswer}`;
+
+  return { percentage, feedback };
+}
+
+// ═══════════════════════════════════════
+// EVALUACIÓN DE ORDENAR SECUENCIA
+// ═══════════════════════════════════════
+function evaluateOrder(studentAnswer, correctAnswer) {
+  if (!studentAnswer || studentAnswer.trim().length < 2) {
+    return { percentage: 0, feedback: 'Sin respuesta' };
+  }
+  if (!correctAnswer || correctAnswer.trim().length < 2) {
+    return { percentage: 0, feedback: 'Pregunta sin respuesta correcta definida' };
+  }
+
+  const norm = s => (s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/^\d+[\.\-\)]\s*/, '') // quitar numeración inicial
+    .trim();
+
+  // Separar ítems por salto de línea, punto y coma, o coma
+  const correctItems = correctAnswer.split(/[\n;,]+/).map(norm).filter(Boolean);
+  const studentItems = studentAnswer.split(/[\n;,]+/).map(norm).filter(Boolean);
+
+  if (correctItems.length === 0) {
+    return { percentage: 0, feedback: 'Pregunta sin respuesta correcta definida' };
+  }
+
+  // Contar ítems en la posición correcta
+  const minLen = Math.min(correctItems.length, studentItems.length);
+  let inOrder = 0;
+  for (let i = 0; i < minLen; i++) {
+    if (studentItems[i] === correctItems[i] ||
+        correctItems[i].includes(studentItems[i]) ||
+        (studentItems[i].length > 3 && correctItems[i].includes(studentItems[i].slice(0, -1)))) {
+      inOrder++;
+    }
+  }
+
+  const percentage = Math.round((inOrder / correctItems.length) * 100);
+  const feedback = percentage === 100
+    ? 'Correcto — orden exacto'
+    : percentage > 0
+      ? `Parcial: ${inOrder} de ${correctItems.length} ítems en orden correcto`
+      : `Incorrecto. Orden correcto: ${correctAnswer}`;
+
+  return { percentage, feedback };
 }
 
 function evaluateKeywords(studentAnswer, keywordsStr, correctAnswer) {
