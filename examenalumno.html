@@ -1175,12 +1175,10 @@ function render() {
   if (S.phase === 'exam') {
     document.body.classList.add('exam-active');
     document.documentElement.classList.remove('info-scroll');
-  } else if (S.phase === 'info') {
+  } else {
+    // info, results, load: scroll normal del documento
     document.body.classList.remove('exam-active');
     document.documentElement.classList.add('info-scroll');
-  } else {
-    document.body.classList.remove('exam-active');
-    document.documentElement.classList.remove('info-scroll');
   }
 
   // Mostrar overlay de bloqueo si aplica (pero NO si está suspendido)
