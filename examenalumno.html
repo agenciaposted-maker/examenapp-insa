@@ -1010,7 +1010,7 @@ async function attemptUnlock() {
     S.warningLog.push({ time: new Date().toISOString(), reason: `DESBLOQUEADO (#${S.unlockCount}): ${S.blockReason}` });
 
     // Verificar si excede el límite de desbloqueos
-    if (S.unlockCount >= SECURITY.maxUnlocks) {
+    if (S.unlockCount > SECURITY.maxUnlocks) {
       document.getElementById('unlockPw').value = '';
       suspendExam(`Límite de desbloqueos excedido (${S.unlockCount}/${SECURITY.maxUnlocks})`);
       return;
@@ -1824,7 +1824,7 @@ function evaluateExam() {
           weightUsed  += s.weight;
         }
       });
-      if (weightUsed > 0) results.percentage = Math.round(weightedPct);
+      if (weightUsed > 0) results.percentage = Math.round(weightedPct * 100 / weightUsed);
       results.sectionStats = sectionStats;
     }
 

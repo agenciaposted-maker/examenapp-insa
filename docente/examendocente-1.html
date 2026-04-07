@@ -395,11 +395,50 @@ async function loadPDF(file) {
 
 async function loadDocx(file) {
   const buf = await file.arrayBuffer();
-  const result = await mammoth.extractRawText({arrayBuffer: buf});
-  S.rawText = result.value.trim();
+  const result = await mammoth.convertToHtml({arrayBuffer: buf});
+  S.rawText = htmlToTextWithBold(result.value).trim();
   if (result.messages.length > 0) {
     console.log('Mammoth messages:', result.messages);
   }
+}
+
+// Convierte HTML de Mammoth a texto plano, añadiendo ✓ a las líneas en negrita.
+// Así el correctMarker existente (detecta ✓ al final) identifica la respuesta correcta.
+function htmlToTextWithBold(html) {
+  const lines = [];
+  // Dividir en bloques por cierre de párrafo/lista/encabezado
+  const blocks = html.split(/<\/p>|<\/li>|<\/h[1-6]>/i);
+
+  for (let block of blocks) {
+    block = block.replace(/<(?:p|li|h[1-6]|div|ul|ol)[^>]*>/gi, '');
+    if (!block.trim()) continue;
+
+    // Extraer contenido en negrita
+    const boldParts = [];
+    const bReg = /<strong>([\s\S]*?)<\/strong>/gi;
+    let bm;
+    while ((bm = bReg.exec(block)) !== null) {
+      boldParts.push(bm[1].replace(/<[^>]+>/g, '').trim());
+    }
+    const boldContent = boldParts.join(' ').trim();
+
+    // Extraer texto completo decodificando entidades HTML
+    const fullText = block
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+      .replace(/&[a-z]+;/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+
+    if (!fullText) continue;
+
+    // Si más del 50% del contenido está en negrita → marcar como correcta con ✓
+    const isBold = boldContent.length > 0 && boldContent.length >= fullText.length * 0.5;
+    lines.push(isBold ? fullText + ' ✓' : fullText);
+  }
+
+  return lines.join('\n');
 }
 
 function skipUpload() {
@@ -1254,7 +1293,7 @@ function setOpt(qi, oi, letter, val) {
 }
 
 function renderQList() {
-  const tl = { open:'Desarrollo', fill:'Completar', multiple:'Opción múltiple', vf:'V/F' };
+  const tl = ALL_TYPE_LABELS;
   document.getElementById('qList').innerHTML = S.questions.length === 0
     ? `<div class="empty"><div class="empty-icon">📝</div><div>No hay preguntas todavía.</div></div>`
     : S.questions.map((q,i) => renderQCard(q,i,tl)).join('');
