@@ -405,33 +405,86 @@ async function loadDocx(file) {
 // Convierte HTML de Mammoth a texto plano, añadiendo ✓ a las líneas en negrita.
 // Así el correctMarker existente (detecta ✓ al final) identifica la respuesta correcta.
 function htmlToTextWithBold(html) {
+  // Usar el DOM del navegador para parsear correctamente el HTML de Mammoth.
+  // Esto maneja: listas numeradas <ol> (agrega "1. " al texto), negrita inline
+  // <strong>/<b> (agrega ✓ justo después), tablas (<tr> con número en primera celda).
+  const div = document.createElement('div');
+  div.innerHTML = html;
   const lines = [];
-  // Dividir en bloques por cierre de párrafo/lista/encabezado
-  const blocks = html.split(/<\/p>|<\/li>|<\/h[1-6]>/i);
 
-  for (let block of blocks) {
-    block = block.replace(/<(?:p|li|h[1-6]|div|ul|ol)[^>]*>/gi, '');
-    if (!block.trim()) continue;
-
-    // Insertar ✓ inline justo después de cada segmento en negrita
-    // Así "b) texto correcto" en bold → "b) texto correcto ✓" dentro de la línea
-    let processed = block.replace(/<strong>([\s\S]*?)<\/strong>/gi, (_, content) => {
-      const text = content.replace(/<[^>]+>/g, '').trim();
-      return text ? text + ' ✓' : '';
-    });
-
-    // Decodificar entidades y limpiar tags restantes
-    const fullText = processed
-      .replace(/<[^>]+>/g, '')
-      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
-      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
-      .replace(/&[a-z]+;/g, ' ')
-      .replace(/\s+/g, ' ').trim();
-
-    if (fullText) lines.push(fullText);
+  // Extrae texto inline de un nodo. Para <strong>/<b> agrega ✓ al final del contenido.
+  function getInlineText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = node.tagName.toLowerCase();
+    const inner = Array.from(node.childNodes).map(getInlineText).join('');
+    if (tag === 'strong' || tag === 'b') {
+      const t = inner.trim();
+      return t ? t + ' ✓' : '';
+    }
+    return inner;
   }
 
+  function pushLine(text) {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (clean) lines.push(clean);
+  }
+
+  function walk(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName.toLowerCase();
+
+    // Párrafos y encabezados: texto plano con bold marcado
+    if (['p','h1','h2','h3','h4','h5','h6'].includes(tag)) {
+      pushLine(getInlineText(node));
+      return;
+    }
+
+    // Lista numerada: agregar "N. " como prefijo a cada ítem
+    if (tag === 'ol') {
+      let n = 0;
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toLowerCase() === 'li') {
+          n++;
+          pushLine(`${n}. ${getInlineText(child)}`);
+        }
+      }
+      return;
+    }
+
+    // Lista sin numerar
+    if (tag === 'ul') {
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toLowerCase() === 'li') {
+          pushLine(getInlineText(child));
+        }
+      }
+      return;
+    }
+
+    // Fila de tabla: si la primera celda es solo un número úsalo como prefijo "N. "
+    if (tag === 'tr') {
+      const cells = [];
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.ELEMENT_NODE && ['td','th'].includes(child.tagName.toLowerCase())) {
+          const t = getInlineText(child).replace(/\s+/g,' ').trim();
+          if (t) cells.push(t);
+        }
+      }
+      if (cells.length === 0) return;
+      if (cells.length >= 2 && /^\d{1,3}\.?$/.test(cells[0])) {
+        pushLine(`${cells[0].replace('.','').trim()}. ${cells.slice(1).join(' ')}`);
+      } else {
+        pushLine(cells.join(' '));
+      }
+      return;
+    }
+
+    // Contenedores genéricos: recurrir en hijos
+    for (const child of node.childNodes) walk(child);
+  }
+
+  walk(div);
   return lines.join('\n');
 }
 
