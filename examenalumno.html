@@ -3102,9 +3102,15 @@ render();
 // Detectar si ya hay estado guardado con examen
 if (loadState() && S.examId && S.phase !== 'load') {
   // Pedir cargar el archivo de nuevo para recuperar examData
-  toast('Carga el archivo del examen para continuar', 'warn');
+  const wasBlocked = S.blocked;
   S.phase = 'load';
+  S.blocked = false; // Ocultar overlay hasta que se recargue el archivo del examen
   render();
+  if (wasBlocked) {
+    toast('Tu examen estaba bloqueado. Carga el archivo del examen para continuar.', 'warn');
+  } else {
+    toast('Carga el archivo del examen para continuar', 'warn');
+  }
 }
 
 // ═══════════════════════════════════════

@@ -192,7 +192,7 @@ const defaultState = {
   password2: '',
 };
 
-const S = loadState() || { ...defaultState };
+const S = { ...defaultState, ...(loadState() || {}) };
 
 // ═══════════════════════════════════════
 // RENDER ENGINE
