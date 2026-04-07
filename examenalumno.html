@@ -1057,13 +1057,43 @@ function startTimer() {
   S.startTime = S.startTime || Date.now();
   saveState();
 
+  const duration = (examData && examData.meta && examData.meta.duration) ? examData.meta.duration : 0;
+  const timerEl = document.getElementById('timer');
+
   // Timer principal (cada segundo)
   timerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - S.startTime) / 1000);
-    const mins = Math.floor(elapsed / 60);
-    const secs = elapsed % 60;
-    document.getElementById('timerIcon').textContent =
-      `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+
+    if (duration > 0) {
+      // Modo cuenta regresiva
+      const remaining = duration * 60 - elapsed;
+      if (remaining <= 0) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        document.getElementById('timerIcon').textContent = '00:00';
+        toast('¡Tiempo agotado! El examen se envía automáticamente.', 'error');
+        submitExam();
+        return;
+      }
+      const mins = Math.floor(remaining / 60);
+      const secs = remaining % 60;
+      document.getElementById('timerIcon').textContent =
+        `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+      // Colores de advertencia
+      if (remaining <= 300) {
+        timerEl.classList.remove('warning'); timerEl.classList.add('danger');
+      } else if (remaining <= 600) {
+        timerEl.classList.add('warning'); timerEl.classList.remove('danger');
+      } else {
+        timerEl.classList.remove('warning'); timerEl.classList.remove('danger');
+      }
+    } else {
+      // Modo cronómetro (cuenta hacia arriba)
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      document.getElementById('timerIcon').textContent =
+        `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+    }
   }, 1000);
 
   // Auto-guardado de seguridad cada 30 segundos
@@ -1323,6 +1353,7 @@ function screenInfo() {
       <span><strong>Materia:</strong> ${esc(meta.subject)}</span>
       <span><strong>Grado:</strong> ${esc(meta.grade)}</span>
       ${meta.date ? `<span><strong>Fecha:</strong> ${meta.date}</span>` : ''}
+      ${meta.duration ? `<span><strong>Tiempo límite:</strong> ${meta.duration} min</span>` : ''}
     </div>
     ${meta.teacher ? `<div class="meta" style="margin-top:.2rem"><strong>Docente:</strong> ${esc(meta.teacher)}</div>` : ''}
   </div>
@@ -1362,7 +1393,7 @@ function screenInfo() {
 
   <div class="card" style="text-align:center;background:#fafafa">
     <p style="font-size:.85rem;margin-bottom:.8rem">
-      <strong>${examData.questions.length}</strong> preguntas &nbsp;·&nbsp; <strong>${meta.totalPoints}</strong> puntos totales
+      <strong>${examData.questions.length}</strong> preguntas &nbsp;·&nbsp; <strong>${meta.totalPoints}</strong> puntos totales${meta.duration ? ` &nbsp;·&nbsp; <strong>${meta.duration} min</strong>` : ''}
     </p>
     <button class="btn btn-primary w-full" onclick="startExam()" style="padding:.7rem;font-size:.9rem">
       INICIAR EXAMEN

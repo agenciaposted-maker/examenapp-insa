@@ -180,7 +180,7 @@ function clearState() {
 
 const defaultState = {
   step: 1,
-  meta: { name:'', subject:'Lenguaje y Literatura', grade:'2° Bachillerato General', section:'N', teacher:'', date:'', instructions:'' },
+  meta: { name:'', subject:'Lenguaje y Literatura', grade:'2° Bachillerato General', section:'N', teacher:'', date:'', instructions:'', duration:0 },
   rawText: '',
   fileName: '',
   questions: [],
@@ -242,9 +242,15 @@ function screenMeta() {
         <input class="input" id="m_teacher" value="${esc(S.meta.teacher)}" autocomplete="off">
       </div>
     </div>
-    <div class="form-group">
-      <label for="m_date">Fecha del examen</label>
-      <input class="input" type="date" id="m_date" value="${S.meta.date}">
+    <div class="grid-2">
+      <div class="form-group">
+        <label for="m_date">Fecha del examen</label>
+        <input class="input" type="date" id="m_date" value="${S.meta.date}">
+      </div>
+      <div class="form-group">
+        <label for="m_duration">Duración (minutos) — 0 = sin límite</label>
+        <input class="input" type="number" id="m_duration" min="0" max="300" placeholder="Ej: 90" value="${S.meta.duration || ''}">
+      </div>
     </div>
     <div class="form-group">
       <label for="m_instructions">Indicaciones generales</label>
@@ -266,6 +272,7 @@ function saveMeta() {
   S.meta.section = document.getElementById('m_section').value.trim();
   S.meta.teacher = document.getElementById('m_teacher').value.trim();
   S.meta.date = document.getElementById('m_date').value;
+  S.meta.duration = parseInt(document.getElementById('m_duration').value) || 0;
   S.meta.instructions = document.getElementById('m_instructions').value.trim();
   S.step = 2; render();
 }
@@ -486,6 +493,21 @@ function parseQuestions() {
     return q;
   });
 
+  // Normalizar letras de opciones: ordenar y re-asignar A, B, C, D en secuencia
+  questions = questions.map(q => {
+    if (q.type === 'multiple' && q.options && q.options.length >= 2) {
+      q.options.sort((a, b) => a.letter.localeCompare(b.letter));
+      const correctIdx = q.options.findIndex(o => o.correct);
+      q.options = q.options.map((o, i) => ({ ...o, letter: String.fromCharCode(65 + i) }));
+      if (correctIdx >= 0) {
+        const newLetter = String.fromCharCode(65 + correctIdx);
+        q.answer = newLetter;
+        q.correct = newLetter;
+      }
+    }
+    return q;
+  });
+
   // Limpiar y asignar IDs
   S.questions = questions
     .map((q,i) => ({
@@ -685,8 +707,8 @@ function parseStandardNumbered(lines) {
   // Respuesta: "R:" / "Respuesta:" / "Resp:" / "Rta:" — requiere separador cuando es R sola
   // para no confundir con verbos como "Responde..." o texto que empiece con R
   const aPat = /^[Rr](?:espuesta|esp|ta)[:\.\-]?\s*(.+)|^[Rr][:\.\-]\s*(.+)|^[Aa]nswer[:\.\-]?\s*(.+)/i;
-  // Opciones: a) / a. / A) / A. / (a) / [a] y también i) ii) iii) iv)
-  const optPat = /^[\(\[]?([a-fA-F]|[ivxIVX]{1,4})[\)\.\]]\s*(.+)/;
+  // Opciones: a) / a. / A) / A. / (a) / [a] / a- / a: y también i) ii) iii) iv)
+  const optPat = /^[\(\[]?([a-fA-F]|[ivxIVX]{1,4})[\)\.\-\:\]]\s*(.+)/;
   // Opciones en una sola línea: "a) texto  b) texto  c) texto"
   const multiOptPat = /([a-fA-F])\)\s*([^a-fA-F\)]+)/gi;
   // Detectar respuesta correcta marcada: *a) / a)* / (correcta) / ✓
@@ -1293,6 +1315,7 @@ async function exportJSON() {
       teacher: S.meta.teacher,
       date: S.meta.date,
       instructions: S.meta.instructions,
+      duration: S.meta.duration || 0,
       totalPoints: S.questions.reduce((a,q)=>a+(q.points||1),0),
       created: new Date().toISOString(),
     },
