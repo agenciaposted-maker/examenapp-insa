@@ -187,6 +187,7 @@ const defaultState = {
   rawText: '',
   fileName: '',
   questions: [],
+  sections: [],
   password: '',
   password2: '',
 };
@@ -436,6 +437,9 @@ function parseQuestions() {
   // Preprocesar: unir líneas fragmentadas
   const lines = typeof preprocessLines === 'function' ? preprocessLines(rawLines) : rawLines;
 
+  // Detectar secciones con pesos
+  S.sections = detectSections(lines);
+
   // ── Ejecutar TODAS las estrategias en paralelo ──
   const strategyResults = [
     parseTableFormat(lines),         // E1: tabla estructurada
@@ -478,6 +482,18 @@ function parseQuestions() {
   // Usar la combinación solo si aporta más del 10% de preguntas adicionales
   // (evita ruido cuando todas las estrategias encuentran las mismas preguntas)
   let questions = merged.length > bestSingle.length * 1.1 ? merged : bestSingle;
+
+  // Asignar sección a cada pregunta según su posición en el documento
+  if (S.sections.length > 0) {
+    questions = questions.map(q => {
+      const qPos = getDocPos(q);
+      let assigned = S.sections[0].id;
+      for (const sec of S.sections) {
+        if (sec.lineIdx <= qPos) assigned = sec.id;
+      }
+      return { ...q, section: assigned };
+    });
+  }
 
   // ── Post-procesamiento: detectar tipos de las que quedaron sin opciones
   questions = questions.map(q => {
@@ -938,6 +954,67 @@ function parseFallback(lines) {
 }
 
 // ── HELPERS ──
+// ── Detectar secciones con porcentaje/puntos desde las líneas ──
+function detectSections(lines) {
+  const sections = [];
+  // Ej: "Parte I (40%)", "Sección 1 – Completar – 30 puntos", "Bloque A: 20%"
+  const headerPat = /^(?:(parte|sección|seccion|bloque|unidad|módulo|modulo|apartado)\s+([IVXLCDM]+|\d+|[A-F])|([IVXLCDM]{2,6})\.)\s*[:\.\-]?\s*(.*)/i;
+  const pctPat    = /(\d+(?:\.\d+)?)\s*%/;
+  const ptsPat    = /(?:valor|puntos?|pts?)\s*:?\s*(\d+)|(\d+)\s*(?:puntos?|pts?)\b/i;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] || '').trim();
+    if (!line || line.length < 3 || line.length > 130) continue;
+    const m = line.match(headerPat);
+    if (!m) continue;
+
+    const pct = line.match(pctPat);
+    const pts = line.match(ptsPat);
+    // Para numerales romanos solos, exigir al menos un indicador de peso
+    if (m[3] && !pct && !pts) continue;
+
+    const prefix = m[1] ? `${m[1]} ${m[2]}` : `${m[3]}.`;
+    const rest   = (m[4]||'').replace(/[\(\)\[\]]/g,'')
+                              .replace(/\d+\s*%/g,'')
+                              .replace(/(?:valor|puntos?|pts?)\s*:?\s*\d+/gi,'')
+                              .replace(/(\d+)\s*(?:puntos?|pts?)/gi,'')
+                              .trim();
+    const name   = (rest ? `${prefix}: ${rest}` : prefix).replace(/\s+/g,' ').trim();
+
+    let weight = 0, isPoints = false;
+    if (pct)      { weight = parseFloat(pct[1]); }
+    else if (pts) { weight = parseInt(pts[1]||pts[2]); isPoints = true; }
+
+    sections.push({ id: sections.length + 1, name, weight, isPoints, lineIdx: i });
+  }
+
+  if (sections.length === 0) return [];
+
+  // Convertir puntos a porcentaje si es necesario
+  if (sections.some(s => s.isPoints)) {
+    const totalPts = sections.reduce((sum, s) => sum + s.weight, 0);
+    if (totalPts > 0) sections.forEach(s => { s.weight = Math.round(s.weight / totalPts * 100); });
+  }
+
+  // Si no sumaron ~100, normalizar
+  const totalW = sections.reduce((sum, s) => sum + s.weight, 0);
+  if (totalW < 10) {
+    // Sin pesos: distribuir equitativamente
+    const eq = Math.floor(100 / sections.length);
+    sections.forEach((s, i) => { s.weight = i < sections.length - 1 ? eq : 100 - eq * (sections.length - 1); });
+  } else if (Math.abs(totalW - 100) > 5) {
+    sections.forEach(s => { s.weight = Math.round(s.weight / totalW * 100); });
+  }
+
+  return sections.map(({ id, name, weight, lineIdx }) => ({ id, name, weight, lineIdx }));
+}
+
+function updateSectionWeight(id, val) {
+  const sec = S.sections.find(s => s.id === id);
+  if (sec) sec.weight = Math.max(0, Math.min(100, isNaN(val) ? 0 : val));
+  render();
+}
+
 function isSkipLine(l) {
   if (!l || l.length < 2) return true;
   const t = l.trim().toLowerCase();
@@ -1056,6 +1133,26 @@ function screenQuestions() {
     <div class="summary-box"><div class="summary-val">${S.questions.length}</div><div class="summary-label">Preguntas</div></div>
     <div class="summary-box"><div class="summary-val">${S.questions.reduce((a,q)=>a+(q.points||1),0)}</div><div class="summary-label">Puntos totales</div></div>
     <div class="summary-box"><div class="summary-val">${S.questions.filter(q=>(q.answer||'').trim()).length}</div><div class="summary-label">Con respuesta</div></div>
+  </div>` : ''}
+
+  ${S.sections.length > 0 ? `
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-title">📊 Secciones detectadas <span style="font-size:.75rem;font-weight:normal;color:var(--text2)">— peso en la nota final</span></div>
+    ${S.sections.map(s => {
+      const qCount = S.questions.filter(q => q.section === s.id).length;
+      return `
+      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;padding:.45rem .6rem;background:var(--surface2);border-radius:6px">
+        <div style="flex:1;font-size:.85rem"><strong>${esc(s.name)}</strong> <span style="color:var(--text2);font-size:.78rem">(${qCount} preg.)</span></div>
+        <input type="number" min="0" max="100" value="${s.weight}"
+          onchange="updateSectionWeight(${s.id},+this.value)"
+          class="input" style="width:62px;text-align:center;padding:.3rem .4rem">
+        <span style="font-size:.85rem;color:var(--text2)">%</span>
+      </div>`;
+    }).join('')}
+    <div style="font-size:.76rem;text-align:right;color:var(--text2);margin-top:.3rem">
+      Total: <strong>${S.sections.reduce((t,s)=>t+s.weight,0)}%</strong>
+      ${Math.abs(S.sections.reduce((t,s)=>t+s.weight,0)-100)>1?'<span style="color:var(--danger)"> ⚠ debe sumar 100%</span>':'✓'}
+    </div>
   </div>` : ''}
 
   <div class="tip">
@@ -1322,12 +1419,14 @@ async function exportJSON() {
       totalPoints: S.questions.reduce((a,q)=>a+(q.points||1),0),
       created: new Date().toISOString(),
     },
+    sections: S.sections.map(({id, name, weight}) => ({id, name, weight})),
     pwHash,
     questions: S.questions.map((q,i) => ({
       id: i+1,
       text: q.text,
       type: q.type,
       points: q.points || 1,
+      section: q.section || null,
       options: q.options || [],
       // Respuesta correcta y palabras clave van en base64
       _r: btoa(encodeURIComponent(JSON.stringify({

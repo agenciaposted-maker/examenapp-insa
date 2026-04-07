@@ -1803,6 +1803,31 @@ function evaluateExam() {
       ? Math.round((results.earnedPoints / results.totalPoints) * 100)
       : 0;
 
+    // Si hay secciones con peso, calcular porcentaje ponderado
+    if (examData.sections && examData.sections.length > 0) {
+      const sectionStats = {};
+      examData.sections.forEach(s => {
+        sectionStats[s.id] = { name: s.name, weight: s.weight, earned: 0, total: 0 };
+      });
+      examData.questions.forEach(q => {
+        const qr = results.questions.find(r => r.id === q.id);
+        if (qr && q.section && sectionStats[q.section]) {
+          sectionStats[q.section].earned += qr.earnedPoints;
+          sectionStats[q.section].total  += qr.maxPoints;
+        }
+      });
+      let weightedPct = 0, weightUsed = 0;
+      examData.sections.forEach(s => {
+        const ss = sectionStats[s.id];
+        if (ss.total > 0) {
+          weightedPct += (ss.earned / ss.total) * s.weight;
+          weightUsed  += s.weight;
+        }
+      });
+      if (weightUsed > 0) results.percentage = Math.round(weightedPct);
+      results.sectionStats = sectionStats;
+    }
+
     S.results = results;
     S.submitted = true;
     S.phase = 'results';
@@ -2714,6 +2739,25 @@ function screenResults() {
 
   <div class="card">
     <div class="card-title">Datos del examen</div>
+    ${r.sectionStats && examData.sections && examData.sections.length > 0 ? `
+    <div style="margin-bottom:.8rem;padding-bottom:.8rem;border-bottom:1px solid #eee">
+      <div style="font-size:.78rem;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Desglose por sección</div>
+      ${examData.sections.map(s => {
+        const ss = r.sectionStats[s.id] || {earned:0,total:0};
+        const pct = ss.total > 0 ? Math.round(ss.earned / ss.total * 100) : 0;
+        const contrib = Math.round(pct * s.weight / 100);
+        const color = pct >= 60 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626';
+        return `<div style="margin-bottom:.5rem">
+          <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:.2rem">
+            <span>${esc(s.name)}</span>
+            <span style="color:${color};font-weight:600">${pct}% <span style="color:#888;font-weight:normal">× ${s.weight}% = ${contrib}%</span></span>
+          </div>
+          <div style="height:5px;background:#eee;border-radius:3px">
+            <div style="width:${pct}%;height:100%;background:${color};border-radius:3px;transition:width .5s"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
     <p style="font-size:.9rem;margin-bottom:.3rem"><strong>Alumno:</strong> ${esc(S.student.name)}</p>
     <p style="font-size:.9rem;margin-bottom:.3rem"><strong>Examen:</strong> ${esc(examData.meta.name)}</p>
     <p style="font-size:.9rem;margin-bottom:.3rem"><strong>Advertencias:</strong> ${S.warnings}</p>
