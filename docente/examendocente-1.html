@@ -413,17 +413,15 @@ function htmlToTextWithBold(html) {
     block = block.replace(/<(?:p|li|h[1-6]|div|ul|ol)[^>]*>/gi, '');
     if (!block.trim()) continue;
 
-    // Extraer contenido en negrita
-    const boldParts = [];
-    const bReg = /<strong>([\s\S]*?)<\/strong>/gi;
-    let bm;
-    while ((bm = bReg.exec(block)) !== null) {
-      boldParts.push(bm[1].replace(/<[^>]+>/g, '').trim());
-    }
-    const boldContent = boldParts.join(' ').trim();
+    // Insertar ✓ inline justo después de cada segmento en negrita
+    // Así "b) texto correcto" en bold → "b) texto correcto ✓" dentro de la línea
+    let processed = block.replace(/<strong>([\s\S]*?)<\/strong>/gi, (_, content) => {
+      const text = content.replace(/<[^>]+>/g, '').trim();
+      return text ? text + ' ✓' : '';
+    });
 
-    // Extraer texto completo decodificando entidades HTML
-    const fullText = block
+    // Decodificar entidades y limpiar tags restantes
+    const fullText = processed
       .replace(/<[^>]+>/g, '')
       .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
@@ -431,11 +429,7 @@ function htmlToTextWithBold(html) {
       .replace(/&[a-z]+;/g, ' ')
       .replace(/\s+/g, ' ').trim();
 
-    if (!fullText) continue;
-
-    // Si más del 50% del contenido está en negrita → marcar como correcta con ✓
-    const isBold = boldContent.length > 0 && boldContent.length >= fullText.length * 0.5;
-    lines.push(isBold ? fullText + ' ✓' : fullText);
+    if (fullText) lines.push(fullText);
   }
 
   return lines.join('\n');
@@ -802,7 +796,25 @@ function parseStandardNumbered(lines) {
 
     if (qm && !om) { // Es pregunta (no es opción que empieza con letra)
       save();
-      current = { text: qm[2], answer: '', type: 'open' };
+      let qText = qm[2];
+      // Detectar opciones inline: "¿Pregunta? a) opt1 b) opt2 c) opt3 d) opt4"
+      const inlineOptStart = qText.search(/\s+[a-fA-F]\)\s+/);
+      if (inlineOptStart >= 0 && /\s+[a-fA-F]\)\s+.+\s+[a-fA-F]\)\s+/.test(qText)) {
+        const questionPart = qText.substring(0, inlineOptStart).trim();
+        const optPart = qText.substring(inlineOptStart).trim();
+        const inlineOpts = [];
+        const rx = /([a-fA-F])\)\s*([\s\S]+?)(?=\s+[a-fA-F]\)|$)/gi;
+        let m;
+        while ((m = rx.exec(optPart)) !== null) {
+          const hasCheck = /✓/.test(m[2]);
+          inlineOpts.push({ letter: m[1].toUpperCase(), text: m[2].replace(/\s*✓\s*/g, '').trim(), correct: hasCheck });
+        }
+        if (inlineOpts.length >= 2) {
+          qText = questionPart;
+          opts = inlineOpts;
+        }
+      }
+      current = { text: qText, answer: '', type: 'open' };
       mode = 'q';
     } else if (am && current) {
       current.answer = (am[1]||am[2]||am[3]||'').trim();
