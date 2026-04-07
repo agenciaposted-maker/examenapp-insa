@@ -891,6 +891,9 @@ function updateWarningsBar() {
 }
 
 function blockExam(reason, isCritical = false) {
+  // No bloquear si ya está suspendido o enviado
+  if (S.suspended || S.submitted) return;
+
   // Registrar en log de seguridad
   const logEntry = {
     time: new Date().toISOString(),
@@ -972,6 +975,13 @@ function suspendExam(reason) {
 }
 
 async function attemptUnlock() {
+  // Si el examen ya fue suspendido (overlay quedó visible por error), solo ocultarlo
+  if (S.suspended) {
+    document.getElementById('blockedOverlay').classList.add('hidden');
+    render();
+    return;
+  }
+
   const pw = document.getElementById('unlockPw').value.trim();
   if (!pw) {
     toast('Ingresa la contraseña', 'error');
