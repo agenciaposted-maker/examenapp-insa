@@ -1194,18 +1194,25 @@ function detectSections(lines) {
     if (m[3] && !pct && !pts) continue;
 
     const prefix = m[1] ? `${m[1]} ${m[2]}` : `${m[3]}.`;
-    const rest   = (m[4]||'').replace(/[\(\)\[\]]/g,'')
-                              .replace(/\d+\s*%/g,'')
-                              .replace(/(?:valor|puntos?|pts?)\s*:?\s*\d+/gi,'')
-                              .replace(/(\d+)\s*(?:puntos?|pts?)/gi,'')
-                              .trim();
-    const name   = (rest ? `${prefix}: ${rest}` : prefix).replace(/\s+/g,' ').trim();
+    const raw4 = (m[4]||'').trim();
+
+    // Separar: nombre del tipo (antes del marcador de puntos) y descripción (después)
+    const weightSep = raw4.match(/^(.*?)\s*[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]\s*(.*)/i);
+    let typeName, description;
+    if (weightSep) {
+      typeName    = weightSep[1].trim();
+      description = weightSep[2].trim();
+    } else {
+      typeName    = raw4.replace(/\d+\s*%/g,'').replace(/(?:valor|puntos?|pts?)\s*:?\s*\d+/gi,'').trim();
+      description = '';
+    }
+    const name = (typeName ? `${prefix}: ${typeName}` : prefix).replace(/\s+/g,' ').trim();
 
     let weight = 0, isPoints = false;
     if (pct)      { weight = parseFloat(pct[1]); }
     else if (pts) { weight = parseInt(pts[1]||pts[2]); isPoints = true; }
 
-    sections.push({ id: sections.length + 1, name, weight, isPoints, lineIdx: i });
+    sections.push({ id: sections.length + 1, name, description, weight, isPoints, lineIdx: i });
   }
 
   if (sections.length === 0) return [];
@@ -1226,13 +1233,20 @@ function detectSections(lines) {
     sections.forEach(s => { s.weight = Math.round(s.weight / totalW * 100); });
   }
 
-  return sections.map(({ id, name, weight, lineIdx }) => ({ id, name, weight, lineIdx }));
+  return sections.map(({ id, name, description, weight, lineIdx }) => ({ id, name, description: description||'', weight, lineIdx }));
 }
 
 function updateSectionWeight(id, val) {
   const sec = S.sections.find(s => s.id === id);
   if (sec) sec.weight = Math.max(0, Math.min(100, isNaN(val) ? 0 : val));
   render();
+}
+
+function updateSectionDesc(id, val) {
+  const sec = S.sections.find(s => s.id === id);
+  if (sec) sec.description = val;
+  // No re-render (evita perder foco mientras escribe)
+  saveState();
 }
 
 function isSkipLine(l) {
@@ -1548,12 +1562,18 @@ function screenQuestions() {
     ${S.sections.map(s => {
       const qCount = S.questions.filter(q => q.section === s.id).length;
       return `
-      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;padding:.45rem .6rem;background:var(--surface2);border-radius:6px">
-        <div style="flex:1;font-size:.85rem"><strong>${esc(s.name)}</strong> <span style="color:var(--text2);font-size:.78rem">(${qCount} preg.)</span></div>
-        <input type="number" min="0" max="100" value="${s.weight}"
-          onchange="updateSectionWeight(${s.id},+this.value)"
-          class="input" style="width:62px;text-align:center;padding:.3rem .4rem">
-        <span style="font-size:.85rem;color:var(--text2)">%</span>
+      <div style="margin-bottom:.6rem;padding:.5rem .6rem;background:var(--surface2);border-radius:6px">
+        <div style="display:flex;align-items:center;gap:.6rem">
+          <div style="flex:1;font-size:.85rem"><strong>${esc(s.name)}</strong> <span style="color:var(--text2);font-size:.78rem">(${qCount} preg.)</span></div>
+          <input type="number" min="0" max="100" value="${s.weight}"
+            onchange="updateSectionWeight(${s.id},+this.value)"
+            class="input" style="width:62px;text-align:center;padding:.3rem .4rem">
+          <span style="font-size:.85rem;color:var(--text2)">%</span>
+        </div>
+        <input class="input" style="margin-top:.35rem;font-size:.78rem;color:var(--text2)"
+          placeholder="Instrucción para el alumno (opcional)..."
+          value="${esc(s.description||'')}"
+          oninput="updateSectionDesc(${s.id},this.value)">
       </div>`;
     }).join('')}
     <div style="font-size:.76rem;text-align:right;color:var(--text2);margin-top:.3rem">
@@ -1877,7 +1897,7 @@ async function exportJSON() {
       totalPoints: S.questions.reduce((a,q)=>a+(q.points||1),0),
       created: new Date().toISOString(),
     },
-    sections: S.sections.map(({id, name, weight}) => ({id, name, weight})),
+    sections: S.sections.map(({id, name, description, weight}) => ({id, name, description: description||'', weight})),
     pwHash,
     questions: S.questions.map((q,i) => ({
       id: i+1,
