@@ -518,6 +518,55 @@ function skipUpload() {
 // ═══════════════════════════════════════
 // PARSER DE PREGUNTAS — MULTI-ESTRATEGIA
 // ═══════════════════════════════════════
+
+// ── ESTRATEGIA 0: Pregunta + opciones en una sola línea ──
+// Formato: "¿Pregunta? a) texto a b) texto b c) texto c d) texto d"
+// También: "Verbo imperativo... a) opt b) opt c) opt d) opt"
+function parseInlineQA(lines) {
+  const questions = [];
+  const correctMarker = /^\*|[\*✓✔]|\(correcta?\)|\(correct\)/i;
+  // Regex para extraer opciones. Usa .*? (lazy) para capturar texto completo
+  // incluyendo letras a-f que aparecen en el texto normal en español
+  const optRegex = /([a-fA-F])\)\s*(.*?)(?=\s+[a-fA-F]\)\s|\s*$)/gi;
+
+  for (const line of lines) {
+    if (!line || isSkipLine(line)) continue;
+    if (!isQuestionLine(line)) continue;
+
+    // Buscar dónde comienzan las opciones: primer " a) " o " b) " etc.
+    const splitAt = line.search(/\s+[a-fA-F]\)\s/);
+    if (splitAt < 0) continue; // no hay opciones inline → lo maneja otra estrategia
+
+    const qText = line.substring(0, splitAt).trim();
+    const optText = line.substring(splitAt).trim();
+
+    // Verificar que hay al menos 2 opciones
+    if (!/[a-fA-F]\)\s.+\s+[a-fA-F]\)/.test(optText)) continue;
+
+    // Extraer opciones
+    const opts = [];
+    optRegex.lastIndex = 0;
+    let m;
+    while ((m = optRegex.exec(optText)) !== null) {
+      const isCorrect = correctMarker.test(m[0]);
+      const text = m[2].replace(/\s*[✓✔]\s*$/,'').trim();
+      if (!text) continue;
+      opts.push({ letter: m[1].toUpperCase(), text, correct: isCorrect });
+    }
+
+    if (opts.length < 2) continue;
+
+    const correct = opts.find(o => o.correct);
+    questions.push({
+      text: qText,
+      answer: correct ? correct.letter : '',
+      keywords: '',
+      options: opts,
+      type: 'multiple'
+    });
+  }
+  return questions;
+}
 function parseAndNext() {
   const txt = document.getElementById('rawText') ? document.getElementById('rawText').value : S.rawText;
   S.rawText = txt;
@@ -547,6 +596,7 @@ function parseQuestions() {
 
   // ── Ejecutar TODAS las estrategias en paralelo ──
   const strategyResults = [
+    parseInlineQA(lines),            // E0: pregunta + opciones en una línea (formato más común)
     parseTableFormat(lines),         // E1: tabla estructurada
     parseEjercicioFormat(lines),     // E2: Consigna/Respuesta
     parseStandardNumbered(lines),    // E3: numerado estándar
@@ -906,7 +956,7 @@ function parseStandardNumbered(lines) {
     } else if (multiOpts && current) {
       // Múltiples opciones en una línea
       let m;
-      const regex = /([a-fA-F])\)\s*([^a-fA-F\)]+?)(?=\s+[a-fA-F]\)|$)/gi;
+      const regex = /([a-fA-F])\)\s*(.*?)(?=\s+[a-fA-F]\)\s|\s*$)/gi;
       while ((m = regex.exec(line)) !== null) {
         const isCorrect = correctMarker.test(m[0]);
         opts.push({ letter: m[1].toUpperCase(), text: m[2].trim(), correct: isCorrect });
@@ -1010,12 +1060,16 @@ function parseQuestionWithOptions(lines) {
     // Detectar respuesta correcta marcada
     const correctMarker = /^\*|[\*✓✔]$|\(correcta?\)|\(correct\)/i;
 
-    if (isQuestion(line) && !om && !hasMultiOpt) {
+    if (isQuestion(line) && hasMultiOpt) {
+      // Pregunta + opciones en la misma línea — ya manejado por E0 (parseInlineQA)
+      // Saltar para no crear duplicados, pero resetear current si había uno abierto
+      save();
+    } else if (isQuestion(line) && !om) {
       save();
       current = { text: line.trim(), answer: '', type: 'open' };
     } else if (hasMultiOpt && current) {
       // Extraer múltiples opciones de una línea
-      const regex = /([a-fA-F])\)\s*([^a-fA-F\)]+?)(?=\s+[a-fA-F]\)|$)/gi;
+      const regex = /([a-fA-F])\)\s*(.*?)(?=\s+[a-fA-F]\)\s|\s*$)/gi;
       let m;
       while ((m = regex.exec(line)) !== null) {
         const isCorrect = correctMarker.test(m[0]);
@@ -1054,6 +1108,9 @@ function parseFallback(lines) {
 
     if (!isQuestionLine(l)) continue;
 
+    // Si la pregunta ya tiene opciones inline → ya la maneja E0, saltar
+    if (/\s+[a-fA-F]\)\s/.test(l) && /[a-fA-F]\)\s.+\s+[a-fA-F]\)/.test(l)) continue;
+
     const q = { text: l.trim(), answer: '', type: 'open' };
     let opts = [];
     let j = i + 1;
@@ -1079,7 +1136,7 @@ function parseFallback(lines) {
 
       // Múltiples opciones en una línea
       if (/[a-fA-F]\)\s*.+\s+[a-fA-F]\)\s*.+/.test(nl)) {
-        const rx = /([a-fA-F])\)\s*([^a-fA-F\)]+?)(?=\s+[a-fA-F]\)|$)/gi;
+        const rx = /([a-fA-F])\)\s*(.*?)(?=\s+[a-fA-F]\)\s|\s*$)/gi;
         let m;
         while ((m = rx.exec(nl)) !== null) {
           const isCorrect = correctMarker.test(m[0]);
