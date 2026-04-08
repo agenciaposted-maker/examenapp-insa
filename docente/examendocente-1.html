@@ -81,7 +81,7 @@ label{display:block;font-size:.76rem;font-weight:600;color:var(--text2);margin-b
 .q-card:hover{border-color:#c0c8d8}
 .q-num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--accent);color:#fff;border-radius:50%;font-size:.74rem;font-weight:700;flex-shrink:0}
 .q-header{display:flex;align-items:flex-start;gap:.6rem;margin-bottom:.75rem}
-.q-actions{position:absolute;top:.6rem;right:.6rem;display:flex;gap:.25rem}
+.q-actions{display:flex;gap:.25rem;flex-shrink:0;align-self:flex-start}
 .q-type-badge{display:inline-block;padding:.12rem .55rem;border-radius:20px;font-size:.7rem;font-weight:600;background:var(--accent-light);color:var(--accent);margin-left:.4rem}
 
 /* PROGRESS */
@@ -430,12 +430,25 @@ function htmlToTextWithBold(html) {
     if (clean) lines.push(clean);
   }
 
+  // Extrae texto plano sin marcar negrita (para encabezados de sección)
+  function getPlainText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    return Array.from(node.childNodes).map(getPlainText).join('');
+  }
+
   function walk(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const tag = node.tagName.toLowerCase();
 
-    // Párrafos y encabezados: texto plano con bold marcado
-    if (['p','h1','h2','h3','h4','h5','h6'].includes(tag)) {
+    // Encabezados h1-h6: son títulos de sección, NO marcar negrita con ✓
+    if (['h1','h2','h3','h4','h5','h6'].includes(tag)) {
+      pushLine(getPlainText(node));
+      return;
+    }
+
+    // Párrafos: sí marcar negrita inline (opciones correctas)
+    if (tag === 'p') {
       pushLine(getInlineText(node));
       return;
     }
@@ -1106,8 +1119,9 @@ function detectSections(lines) {
   const ptsPat    = /(?:valor|puntos?|pts?)\s*:?\s*(\d+)|(\d+)\s*(?:puntos?|pts?)\b/i;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = (lines[i] || '').trim();
-    if (!line || line.length < 3 || line.length > 130) continue;
+    // Limpiar ✓ del final (viene de negritas Word) antes de analizar
+    const line = (lines[i] || '').trim().replace(/\s*[✓✔\*]+\s*$/, '').trim();
+    if (!line || line.length < 3 || line.length > 160) continue;
     const m = line.match(headerPat);
     if (!m) continue;
 
@@ -1160,16 +1174,21 @@ function updateSectionWeight(id, val) {
 
 function isSkipLine(l) {
   if (!l || l.length < 2) return true;
-  const t = l.trim().toLowerCase();
+  // Quitar ✓ del final antes de evaluar (viene de negritas en Word)
+  const lClean = l.trim().replace(/\s*[✓✔\*]+\s*$/, '').trim();
+  const t = lClean.toLowerCase();
   return /^[-─═=\s*_\.]+$/.test(l)                         // líneas separadoras
-    || /^(unidad|secci[oó]n|parte|cap[ií]tulo|tema|bloque|m[oó]dulo|lecci[oó]n|actividad)\s*\d*\s*[:\.\-]?\s*$/i.test(l) // secciones sin contenido
-    || /^ejercicio\s+\d+\s*[:\.\-]?\s*$/i.test(l)          // "Ejercicio 1:" solo
-    || /^(cuestionario|examen|evaluaci[oó]n|prueba|test|quiz)\s*\d*\s*$/i.test(l) // títulos
-    || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante)\s*[:\.\-]?\s*_*\s*$/i.test(l) // campos de formulario
-    || /^(instrucciones|indicaciones|nota|observaci[oó]n|importante)\s*[:\.\-]?\s*$/i.test(l) // encabezados de instrucciones
-    || /^p[aá]gina\s+\d+/i.test(l)                         // números de página
-    || /^\d+\s*\/\s*\d+$/.test(l)                          // "1/10" paginación
-    || /^(total|puntaje|puntos|calificaci[oó]n|nota)\s*[:\.\-]?\s*\d*\s*$/i.test(l); // totales
+    // Secciones con o sin contenido: "PARTE III:", "PARTE III: Figuras literarias (20 puntos)"
+    || /^(unidad|secci[oó]n|parte|cap[ií]tulo|tema|bloque|m[oó]dulo|lecci[oó]n|actividad)\s*([IVXLCDM]+|\d+|[A-Z])?\s*[:\.\-]/i.test(lClean)
+    // Secciones solo con número/romano sin contenido posterior
+    || /^(unidad|secci[oó]n|parte|cap[ií]tulo|tema|bloque|m[oó]dulo|lecci[oó]n|actividad)\s*\d*\s*$/i.test(lClean)
+    || /^ejercicio\s+\d+\s*[:\.\-]?\s*$/i.test(lClean)     // "Ejercicio 1:" solo
+    || /^(cuestionario|examen|evaluaci[oó]n|prueba|test|quiz)\s*\d*\s*$/i.test(lClean) // títulos
+    || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante)\s*[:\.\-]?\s*_*\s*$/i.test(lClean) // campos
+    || /^(instrucciones|indicaciones|nota|observaci[oó]n|importante)\s*[:\.\-]?\s*$/i.test(lClean)
+    || /^p[aá]gina\s+\d+/i.test(lClean)                    // números de página
+    || /^\d+\s*\/\s*\d+$/.test(lClean)                     // "1/10" paginación
+    || /^(total|puntaje|puntos|calificaci[oó]n|nota)\s*[:\.\-]?\s*\d*\s*$/i.test(lClean); // totales
 }
 
 function isEjercicio(l) { return /^ejercicio\s+\d+/i.test(l); }
@@ -1509,15 +1528,9 @@ function renderQCard(q, i, typeLabels) {
 
   return `
   <div class="q-card" id="qc${i}">
-    <div class="q-actions">
-        ${i > 0 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},-1)" title="Mover arriba">↑</button>` : ''}
-        ${i < S.questions.length-1 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},1)" title="Mover abajo">↓</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="duplicateQ(${i})" title="Duplicar">⧉</button>
-        <button class="btn btn-danger btn-sm" onclick="removeQ(${i})" title="Eliminar">✕</button>
-      </div>
-    <div class="q-header">
-      <div class="q-num">${i+1}</div>
-      <div style="flex:1">
+    <div class="q-header" style="flex-wrap:wrap;gap:.5rem">
+      <div class="q-num" style="margin-top:.1rem">${i+1}</div>
+      <div style="flex:1;min-width:0">
         <div class="flex gap-sm" style="flex-wrap:wrap;align-items:center">
           <span style="font-weight:600;font-size:.87rem">Pregunta ${i+1}</span>
           <span style="font-size:.72rem;color:var(--text2);padding:.12rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:20px" title="Tipo detectado automáticamente">${(TYPE_ICONS[q.type]||'')}</span>
@@ -1527,6 +1540,12 @@ function renderQCard(q, i, typeLabels) {
           <button class="btn btn-secondary btn-sm" onclick="redetectType(${i})" title="Re-detectar tipo automáticamente" style="font-size:.72rem;padding:.18rem .5rem">↺ Auto</button>
         </div>
         ${q._autoSplit ? `<div style="font-size:.7rem;color:var(--success);margin-top:.2rem">✓ Pregunta y respuesta separadas automáticamente</div>` : ''}
+      </div>
+      <div class="q-actions">
+        ${i > 0 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},-1)" title="Mover arriba">↑</button>` : ''}
+        ${i < S.questions.length-1 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},1)" title="Mover abajo">↓</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="duplicateQ(${i})" title="Duplicar">⧉</button>
+        <button class="btn btn-danger btn-sm" onclick="removeQ(${i})" title="Eliminar">✕</button>
       </div>
     </div>
 
