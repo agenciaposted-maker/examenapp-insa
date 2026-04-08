@@ -447,9 +447,15 @@ function htmlToTextWithBold(html) {
       return;
     }
 
-    // Párrafos: sí marcar negrita inline (opciones correctas)
+    // Párrafos: si es encabezado de sección, usar texto plano (sin ✓)
     if (tag === 'p') {
-      pushLine(getInlineText(node));
+      const plainText = getPlainText(node).replace(/\s+/g, ' ').trim();
+      // Detectar encabezados de sección aunque solo parte del texto esté en negrita
+      if (/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo|modulo|apartado|cap[ií]tulo|lecci[oó]n|actividad|tema|ejercicio)\s*([IVXLCDM]+|\d+|[A-Z])?[\s:\.\-]/i.test(plainText)) {
+        pushLine(plainText);
+      } else {
+        pushLine(getInlineText(node));
+      }
       return;
     }
 
@@ -1174,8 +1180,8 @@ function updateSectionWeight(id, val) {
 
 function isSkipLine(l) {
   if (!l || l.length < 2) return true;
-  // Quitar ✓ del final antes de evaluar (viene de negritas en Word)
-  const lClean = l.trim().replace(/\s*[✓✔\*]+\s*$/, '').trim();
+  // Quitar ✓ de cualquier posición antes de evaluar (viene de negritas Word, puede quedar en medio)
+  const lClean = l.trim().replace(/\s*[✓✔]/g, '').replace(/\s+/g,' ').trim();
   const t = lClean.toLowerCase();
   return /^[-─═=\s*_\.]+$/.test(l)                         // líneas separadoras
     // Secciones con o sin contenido: "PARTE III:", "PARTE III: Figuras literarias (20 puntos)"
@@ -1528,25 +1534,22 @@ function renderQCard(q, i, typeLabels) {
 
   return `
   <div class="q-card" id="qc${i}">
-    <div class="q-header" style="flex-wrap:wrap;gap:.5rem">
-      <div class="q-num" style="margin-top:.1rem">${i+1}</div>
-      <div style="flex:1;min-width:0">
-        <div class="flex gap-sm" style="flex-wrap:wrap;align-items:center">
-          <span style="font-weight:600;font-size:.87rem">Pregunta ${i+1}</span>
-          <span style="font-size:.72rem;color:var(--text2);padding:.12rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:20px" title="Tipo detectado automáticamente">${(TYPE_ICONS[q.type]||'')}</span>
-          <select class="input" style="width:auto;font-size:.78rem;padding:.2rem .5rem" onchange="S.questions[${i}].type=this.value;S.questions[${i}].options=[];renderQList()">
-            ${Object.keys(tl).map(t=>`<option value="${t}" ${q.type===t?'selected':''}>${tl[t]}</option>`).join('')}
-          </select>
-          <button class="btn btn-secondary btn-sm" onclick="redetectType(${i})" title="Re-detectar tipo automáticamente" style="font-size:.72rem;padding:.18rem .5rem">↺ Auto</button>
-        </div>
-        ${q._autoSplit ? `<div style="font-size:.7rem;color:var(--success);margin-top:.2rem">✓ Pregunta y respuesta separadas automáticamente</div>` : ''}
-      </div>
-      <div class="q-actions">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.4rem;margin-bottom:.4rem">
+      <div class="q-num" style="flex-shrink:0">${i+1}</div>
+      <div class="q-actions" style="margin-left:auto">
         ${i > 0 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},-1)" title="Mover arriba">↑</button>` : ''}
         ${i < S.questions.length-1 ? `<button class="btn btn-secondary btn-sm" onclick="moveQ(${i},1)" title="Mover abajo">↓</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="duplicateQ(${i})" title="Duplicar">⧉</button>
         <button class="btn btn-danger btn-sm" onclick="removeQ(${i})" title="Eliminar">✕</button>
       </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.6rem">
+      <span style="font-size:.72rem;color:var(--text2);padding:.12rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:20px" title="Tipo detectado automáticamente">${(TYPE_ICONS[q.type]||'')}</span>
+      <select class="input" style="width:auto;font-size:.78rem;padding:.2rem .5rem" onchange="S.questions[${i}].type=this.value;S.questions[${i}].options=[];renderQList()">
+        ${Object.keys(tl).map(t=>`<option value="${t}" ${q.type===t?'selected':''}>${tl[t]}</option>`).join('')}
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="redetectType(${i})" title="Re-detectar tipo automáticamente" style="font-size:.72rem;padding:.18rem .5rem">↺ Auto</button>
+      ${q._autoSplit ? `<span style="font-size:.7rem;color:var(--success)">✓ Auto-separado</span>` : ''}
     </div>
 
     <div class="form-group">
