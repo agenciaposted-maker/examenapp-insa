@@ -613,6 +613,9 @@ function parseQuestions() {
     return q;
   });
 
+  // Separar preguntas y respuestas que vengan juntas en el texto
+  questions = autoSplitQA(questions);
+
   // Limpiar y asignar IDs
   S.questions = questions
     .map((q,i) => ({
@@ -625,6 +628,7 @@ function parseQuestions() {
       type: q.type || detectType(q.text, q.options && q.options.length >= 2),
       options: q.options || [],
       correct: q.correct || '',
+      _autoSplit: q._autoSplit || false,
     }))
     .filter(q => q.text.length > 4);
 
@@ -867,7 +871,15 @@ function parseStandardNumbered(lines) {
           opts = inlineOpts;
         }
       }
-      current = { text: qText, answer: '', type: 'open' };
+      // Detectar respuesta inline al final del enunciado: "pregunta? → resp" o "pregunta? — resp"
+      let inlineAnswer = '';
+      const arrowSplit = qText.match(/^(.{6,}?\??)\s*[→►]\s*(.{2,})$/);
+      if (arrowSplit) { qText = arrowSplit[1].trim(); inlineAnswer = arrowSplit[2].trim(); }
+      else {
+        const dashSplit = qText.match(/^(.{6,}?\?)\s*[-–—]\s*(.{3,})$/);
+        if (dashSplit) { qText = dashSplit[1].trim(); inlineAnswer = dashSplit[2].trim(); }
+      }
+      current = { text: qText, answer: inlineAnswer, type: 'open', _autoSplit: !!inlineAnswer };
       mode = 'q';
     } else if (am && current) {
       current.answer = (am[1]||am[2]||am[3]||'').trim();
@@ -945,19 +957,8 @@ function parseQuestionWithOptions(lines) {
   // Opciones múltiples en una línea
   const multiOptInline = /([a-fA-F])\)\s*([^a-fA-F\)]{2,})/g;
 
-  // Detecta preguntas con "?" o que empiezan con verbos imperativos comunes
-  const isQuestion = l => {
-    if (isSkipLine(l) || l.trim().length < 6) return false;
-    // Tiene signo de pregunta
-    if (/\?/.test(l)) return true;
-    // Empieza con interrogativo
-    if (/^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|cuántos|cuántas|quién|quiénes|por\s*qué|what|which|how|where|when|who|why)/i.test(l.trim())) return true;
-    // Verbos imperativos que inician consignas (español e inglés)
-    if (/^(escribe|escriba|escribí|completa|complete|completá|identifica|identifique|identificá|menciona|mencione|mencioná|indica|indique|indicá|señala|señale|señalá|ordena|ordene|ordená|clasifica|clasifique|clasificá|relaciona|relacione|relacioná|define|defina|definí|explica|explique|explicá|describe|describa|describí|resuelve|resuelva|resolvé|calcula|calcule|calculá|determina|determine|determiná|encuentra|encuentre|encontrá|selecciona|seleccione|seleccioná|elige|elija|elegí|marca|marque|marcá|subraya|subraye|subrayá|une|una|uní|lee|lea|leé|nombra|nombre|nombrá|analiza|analice|analizá|compara|compare|compará|diferencia|diferencie|diferenciá|enumera|enumere|enumerá|justifica|justifique|justificá|argumenta|argumente|argumentá|demuestra|demuestre|demostrá|traduce|traduzca|traducí|conjuga|conjugue|conjugá|redacta|redacte|redactá|elabora|elabore|elaborá|investiga|investigue|investigá|observa|observe|observá|dibuja|dibuje|dibujá|grafica|grafique|graficá|traza|trace|trazá|mide|mida|medí|write|read|find|choose|select|match|circle|underline|fill|complete|answer|solve|calculate|identify|describe|explain|list|name|give|state)/i.test(l.trim())) return true;
-    // Frases comunes de preguntas
-    if (/^(según|de acuerdo|con base|basándose|a partir|en relación|respecto|acerca|sobre|considerando|teniendo|dado|dada|dados|dadas|si\s+.+\s*,?\s*(entonces|qué|cuál))/i.test(l.trim())) return true;
-    return false;
-  };
+  // Usa la función global isQuestionLine
+  const isQuestion = l => isQuestionLine(l);
 
   // Detectar si una línea es parte de opciones V/F
   const isVFLine = l => /^[\(\[]\s*[\)\]]\s*(V|F|Verdadero|Falso)/i.test(l) || /^\s*(V|F)\s*[\)\.\-]/i.test(l);
@@ -1021,38 +1022,76 @@ function parseQuestionWithOptions(lines) {
   return questions;
 }
 
-// ── ESTRATEGIA 6: Fallback mejorado ──
+// ── ESTRATEGIA 6: Fallback mejorado con extracción de respuesta ──
 function parseFallback(lines) {
   const questions = [];
-  // Buscar cualquier línea que parezca pregunta
+  const optPat = /^[\(\[]?([a-fA-F])[\)\.\-\]]\s*(.+)/;
+  const correctMarker = /^\*|[\*✓✔]$|\(correcta?\)|\(correct\)/i;
+  const aPat = /^[Rr](?:espuesta|esp|ta)?[:\.\-]\s*(.+)|^[Rr][:\.\-]\s*(.+)/i;
+
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (!l || isSkipLine(l)) continue;
 
-    // Línea con ? o que empieza con interrogativo
-    const isQ = (l.includes('?') && l.trim().length > 8) ||
-                /^(qué|cuál|cómo|dónde|cuándo|cuánto|quién|por\s*qué)/i.test(l.trim());
+    if (!isQuestionLine(l)) continue;
 
-    if (isQ) {
-      const q = { text: l.trim(), answer: '', type: 'open' };
+    const q = { text: l.trim(), answer: '', type: 'open' };
+    let opts = [];
+    let j = i + 1;
 
-      // Verificar si las siguientes líneas son opciones
-      let opts = [];
-      let j = i + 1;
-      while (j < lines.length && /^[\(\[]?[a-fA-F][\)\.\-\]]/.test(lines[j])) {
-        const om = lines[j].match(/^[\(\[]?([a-fA-F])[\)\.\-\]]\s*(.+)/);
-        if (om) opts.push({ letter: om[1].toUpperCase(), text: om[2].trim() });
+    // Recoger continuación del enunciado y opciones
+    while (j < lines.length && !isSkipLine(lines[j])) {
+      const nl = lines[j].trim();
+      if (!nl) { j++; break; }
+
+      // Línea de respuesta explícita
+      const am = nl.match(aPat);
+      if (am) { q.answer = (am[1]||am[2]||'').trim(); j++; break; }
+
+      // Opción
+      const om = nl.match(optPat);
+      if (om) {
+        const isCorrect = correctMarker.test(nl);
+        opts.push({ letter: om[1].toUpperCase(), text: om[2].trim(), correct: isCorrect });
+        if (isCorrect && !q.answer) q.answer = om[1].toUpperCase();
         j++;
+        continue;
       }
 
-      if (opts.length >= 2) {
-        q.options = opts;
-        q.type = 'multiple';
-        i = j - 1; // Saltar las líneas de opciones
+      // Múltiples opciones en una línea
+      if (/[a-fA-F]\)\s*.+\s+[a-fA-F]\)\s*.+/.test(nl)) {
+        const rx = /([a-fA-F])\)\s*([^a-fA-F\)]+?)(?=\s+[a-fA-F]\)|$)/gi;
+        let m;
+        while ((m = rx.exec(nl)) !== null) {
+          const isCorrect = correctMarker.test(m[0]);
+          opts.push({ letter: m[1].toUpperCase(), text: m[2].trim(), correct: isCorrect });
+        }
+        j++;
+        continue;
       }
 
-      questions.push(q);
+      // Si ya hay opciones y llega nueva pregunta → parar
+      if (opts.length > 0 && isQuestionLine(nl)) break;
+
+      // Si no hay opciones → puede ser continuación del enunciado
+      if (opts.length === 0 && !isQuestionLine(nl)) {
+        q.text += ' ' + nl;
+        j++;
+        continue;
+      }
+
+      break;
     }
+
+    if (opts.length >= 2) {
+      q.options = opts;
+      q.type = 'multiple';
+      const correct = opts.find(o => o.correct);
+      if (correct) q.answer = correct.letter;
+      i = j - 1;
+    }
+
+    questions.push(q);
   }
   return questions;
 }
@@ -1135,26 +1174,55 @@ function isSkipLine(l) {
 
 function isEjercicio(l) { return /^ejercicio\s+\d+/i.test(l); }
 
+// ── Función global: determina si una línea es una pregunta ──
+function isQuestionLine(l) {
+  if (!l || isSkipLine(l) || l.trim().length < 5) return false;
+  const t = l.trim();
+
+  // Contiene signo de pregunta
+  if (/\?/.test(t)) return true;
+
+  // Empieza con pronombre interrogativo
+  if (/^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|cuántos|cuántas|cuánta|quién|quiénes|por\s*qué|para\s*qué|de\s*qué|a\s*qué|con\s*qué|what|which|how|where|when|who|why|whose)/i.test(t)) return true;
+
+  // Verbos imperativos que inician consignas — español (tú/vos/usted) e inglés
+  if (/^(escrib[eaií]|completa|complet[ae]|identifica|identifiqu[eé]|menciona|mension[ae]|indic[aáeé]|señal[aáeé]|ordan[aá]|orden[ae]|clasific[aá]|relaciona|relacion[ae]|defin[eií]|defin[ae]|explic[aáeé]|describ[eií]|describ[ae]|resuelv[ae]|resolv[eé]|calcula|calcul[ae]|determin[aáeé]|encuentr[ae]|encontrá|selecci[oó]n[ae]|elij[ae]|elig[eí]|marc[aáeé]|subray[aáeé]|un[eí]|un[ae]|le[eé]|nombr[ae]|analiz[aáeé]|compar[ae]|diferenci[ae]|enumer[ae]|justific[aáeé]|argument[ae]|demostr[áeé]|traduc[eí]|conjug[ae]|redact[ae]|elabor[ae]|investig[ae]|observ[ae]|dibuj[ae]|grafic[ae]|traz[ae]|mid[eí]|interpret[ae]|evalúa|evalú[ae]|sintetiz[ae]|resumí|resum[ae]|infier[ae]|deduc[eé]|comenta|coment[ae]|opina|opin[ae]|propon[eé]|sugier[ae]|verifica|verific[ae]|escog[eé]|seleccion[áa]|circula|circulá|subraya|subrayá|tacha|tachá|anota|anotá|copiaí|registr[ae]|aplic[ae]|us[ae]|escucha|recit[ae]|conjugá|clasific[ae]|agrupa|agrupá|recorta|recortá|peg[ae]|formul[ae]|plant[ae]|propon[eé]|write|read|find|choose|select|match|circle|underline|fill|complete|answer|solve|calculate|identify|describe|explain|list|name|give|state|determine|analyze|compare|define|translate|conjugate|order|sort|connect|draw|label)/i.test(t)) return true;
+
+  // Frases de contexto que introducen preguntas
+  if (/^(según|de acuerdo (a|con)|con base (en)?|basándose (en)?|a partir de|en relación (a|con)|respecto (a)?|acerca de|sobre la base|considerando (que)?|teniendo en cuenta|dado (que)?|dada (la|una)?|si\s+.{3,}\s*,?\s*(entonces|qué|cuál|cómo)|de las? siguientes?|cuál(es)? de las? siguientes?|escog[eé] la? (opción|respuesta)|elige? la? (opción|respuesta)|indica (cuál|qué|cómo)|¿)/i.test(t)) return true;
+
+  // Empieza con número seguido de patrón de pregunta (ya manejado por estrategia 3, pero útil aquí)
+  // No incluimos esto para no duplicar con la estrategia 3
+
+  return false;
+}
+
 // Preprocesar líneas: unir líneas fragmentadas, normalizar formato
 function preprocessLines(lines) {
   const result = [];
   let buffer = '';
 
+  // Patrones que NUNCA se unen a la línea anterior
+  const isBreakLine = l =>
+    /^[\(\[]?([a-fA-F]|[ivxIVX]{1,4})[\)\.\-\]]/.test(l) ||    // opción a) b) c)
+    /^(\d{1,3})[.\-\)\:]{1,2}\s/.test(l) ||                     // número de pregunta
+    /^(r|respuesta|resp|rta|solución|solucion|consigna|ejercicio|pregunta)\s*[:\.\-]/i.test(l) ||
+    isSkipLine(l) ||
+    isQuestionLine(l);                                            // nueva pregunta
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+
     if (!line) {
       if (buffer) { result.push(buffer); buffer = ''; }
       continue;
     }
 
-    // Si la línea anterior no terminó en puntuación y esta no empieza con patrón especial
-    const continuesLine = buffer &&
-      !/[.?!:;\]\)]$/.test(buffer) &&
-      !/^[\(\[]?[a-fA-F\d][\)\.\-\]]/.test(line) &&
-      !/^(r|respuesta|pregunta|consigna|ejercicio)/i.test(line) &&
-      !isSkipLine(line);
+    // Decidir si esta línea continúa la anterior
+    const prevEndsOpen = buffer && !/[.?!:;\]\)»]$/.test(buffer);
+    const curIsBreak   = isBreakLine(line);
 
-    if (continuesLine && line.length < 120) {
+    if (buffer && prevEndsOpen && !curIsBreak && line.length < 140) {
       buffer += ' ' + line;
     } else {
       if (buffer) result.push(buffer);
@@ -1174,39 +1242,63 @@ function clean(str) {
 
 // Genera palabras clave automáticas a partir de la respuesta
 function autoKeywords(answer) {
-  if (!answer) return '';
-  // Tomar palabras de más de 5 letras que no sean stopwords
-  const stops = new Set(['para','como','que','con','una','los','las','del','por','son','sus','está','este','esta','ese','esa','más','pero','porque','cuando','donde','quien','cuál','qué','cómo']);
-  const words = answer.toLowerCase()
+  if (!answer || answer.trim().length < 2) return '';
+
+  // Stopwords extendidas
+  const stops = new Set([
+    'para','como','que','con','una','los','las','del','por','son','sus',
+    'está','este','esta','ese','esa','más','pero','porque','cuando','donde',
+    'quien','cuál','qué','cómo','entre','desde','hasta','sobre','también',
+    'todo','toda','todos','todas','cada','otro','otra','unos','unas','algo',
+    'nada','bien','mal','muy','poco','mucho','ser','hay','han','fue','era',
+    'sin','nos','les','nos','mis','tus','sus','nos','les','uno','dos','tres',
+    'ante','bajo','tras','cuyo','cuya','sino','aunque','pues','así','tal'
+  ]);
+
+  const norm = s => (s || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z\s]/g,' ')
-    .split(/\s+/)
-    .filter(w => w.length > 4 && !stops.has(w));
-  // Únicos, máximo 8
-  const unique = [...new Set(words)].slice(0,8);
-  return unique.join(', ');
+    .replace(/[^a-z\s]/g,' ').replace(/\s+/g,' ').trim();
+
+  const normAnswer = norm(answer);
+  const words = normAnswer.split(/\s+/)
+    .filter(w => w.length >= 4 && !stops.has(w));
+
+  // Deduplicar (priorizar palabras más largas, más específicas)
+  const seen = new Map();
+  for (const w of words) {
+    if (!seen.has(w)) seen.set(w, w.length);
+  }
+
+  // Ordenar: palabras únicas, por longitud descendente (más largas primero = más específicas)
+  const sorted = [...seen.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(e => e[0]);
+
+  // Recuperar forma original del texto (sin normalizar completamente) cuando sea posible
+  // Máximo 10 keywords
+  return sorted.slice(0, 10).join(', ');
 }
 
 function detectType(text, hasOptions = false) {
   const t = text.toLowerCase();
 
   // V/F: detectar múltiples formatos
-  if (/verdadero\s*(o|\/|\|)?\s*falso|falso\s*(o|\/|\|)?\s*verdadero|v\s*\/\s*f|f\s*\/\s*v|true\s*(or|\/|\|)?\s*false|\(\s*\)\s*v\s+\(\s*\)\s*f|\[\s*\]\s*v\s+\[\s*\]\s*f|cierto\s*(o|\/|\|)?\s*falso|correcto\s*(o|\/|\|)?\s*incorrecto|indica\s+si\s+(es\s+)?(verdadero|cierto|correcto)|marca\s+(v|verdadero)\s+o\s+(f|falso)|di\s+si\s+(es\s+)?(verdad|mentira|cierto|falso)/i.test(t)) return 'vf';
+  if (/verdadero\s*(o|\/|\|)?\s*falso|falso\s*(o|\/|\|)?\s*verdadero|v\s*\/\s*f|f\s*\/\s*v|true\s*(or|\/|\|)?\s*false|\(\s*\)\s*v\s+\(\s*\)\s*f|\[\s*\]\s*v\s+\[\s*\]\s*f|cierto\s*(o|\/|\|)?\s*falso|correcto\s*(o|\/|\|)?\s*incorrecto|indica\s+si\s+(es\s+)?(verdadero|cierto|correcto)|marca\s+(v|verdadero)\s+o\s+(f|falso)|di\s+si\s+(es\s+)?(verdad|mentira|cierto|falso)|escribe\s+v\s+o\s+f|circula\s+(v|f)|anota\s+v\s+o\s+f|marca\s+con\s+(v|f)|determina\s+si\s+(es\s+)?(verdadero|falso|cierto)|señala\s+si\s+(es\s+)?(verdadero|falso)|¿?(es\s+)?(verdadero|falso)\s+que/i.test(t)) return 'vf';
 
   // Si tiene opciones definidas → multiple
   if (hasOptions) return 'multiple';
 
   // Relacionar/Match: detectar preguntas de emparejar columnas
-  if (/relaciona|relacione|relacioná|une\s+(con|cada)|empareja|empareje|emparejá|conecta|conecte|conectá|asocia|asocie|asociá|match|matching|columna\s*a.*columna\s*b|une\s+las?\s+columnas?|traza\s+(una\s+)?l[ií]nea/i.test(t)) return 'match';
+  if (/relaciona|relacione|relacioná|une\s+(con|cada)|empareja|empareje|emparejá|conecta|conecte|conectá|asocia|asocie|asociá|match|matching|columna\s*a.*columna\s*b|une\s+las?\s+columnas?|traza\s+(una\s+)?l[ií]nea|parejas?|escoge\s+la\s+definici[oó]n|une\s+(cada\s+)?(concepto|t[eé]rmino|palabra)|une\s+(con\s+)?flechas?|conecta\s+(con\s+)?flechas?/i.test(t)) return 'match';
 
   // Ordenar: detectar preguntas de secuencia
-  if (/ordena|ordene|ordená|orden(a|e)?\s+(cronol[oó]gic|l[oó]gic|alfab[eé]tic|secuenc)|pon\s+en\s+orden|organiza|organice|organizá|secuencia|enumera\s+(en\s+)?orden|arrange|put\s+in\s+order|sequence/i.test(t)) return 'order';
+  if (/ordena|ordene|ordená|orden(a|e)?\s+(cronol[oó]gic|l[oó]gic|alfab[eé]tic|secuenc)|pon\s+en\s+orden|organiza|organice|organizá|secuencia|enumera\s+(en\s+)?orden|arrange|put\s+in\s+order|sequence|del\s+primero\s+al|de\s+mayor\s+a\s+menor|de\s+menor\s+a\s+mayor|paso\s+a\s+paso|en\s+forma\s+(cronol[oó]gica|secuencial)|numeralos|num[eé]ralas/i.test(t)) return 'order';
 
   // Fill: detectar espacios en blanco de múltiples formas
-  if (/_{2,}|\.{3,}|\[\s*\]|\(\s*\)|\(blank\)|\(espacio\)|<blank>|<espacio>|completa\s+(la|el|los|las|con)|complete|completá|llena\s+(el|los|la|las)|llene|llená|rellena|rellene|rellaná|escribe\s+(en\s+)?(el|los|la|las)?\s*(espacio|blank|hueco)|fill\s+in|palabra\s+faltante|espacio\s+en\s+blanco/i.test(t)) return 'fill';
+  if (/_{2,}|\.{3,}|\[\s*\]|\(\s*\)|\(blank\)|\(espacio\)|<blank>|<espacio>|completa\s+(la|el|los|las|con)|complete|completá|llena\s+(el|los|la|las)|llene|llená|rellena|rellene|rellaná|escribe\s+(en\s+)?(el|los|la|las)?\s*(espacio|blank|hueco)|fill\s+in|palabra\s+faltante|espacio\s+en\s+blanco|t[eé]rmino\s+correcto|t[eé]rmino\s+faltante|palabra\s+correcta|completa\s+el\s+espacio|escribe\s+la\s+palabra|escribe\s+el\s+t[eé]rmino/i.test(t)) return 'fill';
 
   // Cálculo/numérico: detectar preguntas matemáticas
-  if (/calcula|calcule|calculá|resuelve|resuelva|resolvé|halla|halle|hallá|encuentra\s+(el|la)\s*(valor|resultado|suma|resta|producto|cociente|[aá]rea|per[ií]metro|volumen)|solve|compute|find\s+the\s+(value|result|sum|difference|product|area|perimeter)/i.test(t)) return 'numeric';
+  if (/calcula|calcule|calculá|resuelve|resuelva|resolvé|halla|halle|hallá|encuentra\s+(el|la)\s*(valor|resultado|suma|resta|producto|cociente|[aá]rea|per[ií]metro|volumen)|solve|compute|find\s+the\s+(value|result|sum|difference|product|area|perimeter)|operaci[oó]n|ecuaci[oó]n|resultado\s+de|cu[aá]nto\s+(es|son|vale|mide|pesa)|cu[aá]ntos?\s+(son|hay|tiene)|determina\s+(el|la)\s*(valor|[aá]rea|volumen|per[ií]metro)/i.test(t)) return 'numeric';
 
   return 'open';
 }
@@ -1222,6 +1314,121 @@ const ALL_TYPE_LABELS = {
   numeric: 'Cálculo'
 };
 
+// Íconos de tipo para mostrar en la UI
+const TYPE_ICONS = {
+  open: '📝', fill: '✏️', multiple: '◉', vf: '☑', match: '⇄', order: '⇅', numeric: '∑'
+};
+
+// ── Post-procesador: separa pregunta y respuesta cuando van juntas en el texto ──
+function autoSplitQA(questions) {
+  // Intentar separar texto en pregunta + respuesta usando múltiples patrones
+  function trySplit(t) {
+    // P1: flecha "→" o "►"
+    let m = t.match(/^(.{8,}?)\s*[→►]\s*(.{2,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P2: "¿pregunta? — respuesta" (guión/raya/barra tras ?)
+    m = t.match(/^(.{8,}?\?)\s*[-–—|]\s*(.{3,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P3: "pregunta? = respuesta" (signo igual)
+    m = t.match(/^(.{8,}?\?)\s*=\s*(.{2,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P4: etiqueta "R:", "Resp:", "Rta:", "Respuesta:" inline
+    m = t.match(/^(.{8,}?)\s+[Rr](?:esp(?:uesta)?|ta)?[:\-]\s*(.{3,})$/);
+    if (m && !/^(respuesta|resp|rta|r)$/i.test(m[1].trim())) return [m[1].trim(), m[2].trim()];
+
+    // P5: etiqueta "Respuesta:", "Resp:", "Solución:" como segunda oración
+    m = t.match(/^(.{8,}?[.?!])\s+(?:Respuesta|Resp|Rta|Solución|Solucion|Answer)\s*:\s*(.{2,})$/i);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P6: "La respuesta es: X" o "La respuesta correcta es X"
+    m = t.match(/^(.{8,}?[.?!]?)\s+[Ll]a\s+respuesta\s+(?:correcta\s+)?(?:es|fue)\s*:?\s*(.{2,})$/i);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P7: "(Rpta: X)" o "(R: X)" al final — respuesta entre paréntesis
+    m = t.match(/^(.{8,}?)\s*\(\s*[Rr](?:pta|esp(?:uesta)?)?\s*:\s*(.{1,}?)\s*\)$/i);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P8: doble guión "pregunta -- respuesta"
+    m = t.match(/^(.{8,}?)\s+--\s+(.{3,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P9: "pregunta [TAB] respuesta" (tabulador como separador)
+    m = t.match(/^(.{8,}?)\t+(.{2,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P10: "pregunta / respuesta" con slash (solo si hay signos de pregunta en la primera parte)
+    m = t.match(/^(.{8,}?\?)\s*\/\s*(.{3,})$/);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    // P11: "Verdadero" o "Falso" al final de una oración (V/F con respuesta incluida)
+    m = t.match(/^(.{10,}?[.!]?)\s+(Verdadero|Falso|True|False|Cierto|Correcto|Incorrecto)\s*$/i);
+    if (m && !/(verdadero|falso)/i.test(m[1])) return [m[1].trim(), m[2].trim()];
+
+    // P12: respuesta numérica al final de pregunta de cálculo
+    m = t.match(/^(.{10,}?(?:calcula|resuelve|halla|encuentra)[^.?!]{0,80}[.?]?)\s+([\d\.,\+\-\*\/\(\)\s]{2,30})$/i);
+    if (m) return [m[1].trim(), m[2].trim()];
+
+    return null;
+  }
+
+  return questions.map(q => {
+    if ((q.answer || '').trim().length > 0) return q;
+    const t = (q.text || '').trim();
+    if (t.length < 10) return q;
+
+    const split = trySplit(t);
+    if (split) return { ...q, text: split[0], answer: split[1], _autoSplit: true };
+    return q;
+  });
+}
+
+// ── Determina el formato de respuesta esperada ──
+function detectAnswerHint(text, type, answer) {
+  const t = (text || '').toLowerCase();
+  const a = (answer || '').trim();
+
+  // Múltiple opción → elección
+  if (type === 'multiple') return { label: 'Elección única', code: 'choice' };
+  if (type === 'vf')       return { label: 'V o F', code: 'binary' };
+  if (type === 'match')    return { label: 'Emparejamiento', code: 'pairs' };
+  if (type === 'order')    return { label: 'Secuencia ordenada', code: 'sequence' };
+
+  // Numérica
+  if (type === 'numeric' || /^\s*-?[\d\.,]+([\s]*[\+\-\*\/][\s]*[\d\.,]+)*\s*$/.test(a))
+    return { label: 'Valor numérico', code: 'number' };
+
+  // Completar → palabra o frase corta
+  if (type === 'fill') return { label: 'Palabra / frase', code: 'word' };
+
+  // Análisis de la respuesta ya conocida
+  if (a) {
+    const words = a.split(/\s+/).filter(Boolean).length;
+    if (words === 1) return { label: 'Una palabra', code: 'word' };
+    if (words <= 6)  return { label: 'Frase corta', code: 'short' };
+    if (words <= 30) return { label: 'Párrafo breve', code: 'medium' };
+    return { label: 'Desarrollo extenso', code: 'long' };
+  }
+
+  // Análisis del enunciado cuando no hay respuesta
+  if (/defin[eií]|¿qué es|¿qué son|concepto de|significa/i.test(t))
+    return { label: 'Definición', code: 'definition' };
+  if (/explic[aáeé]|describ[eií]|¿cómo|¿por qué|¿cuál es la razón|¿qué ocurre/i.test(t))
+    return { label: 'Explicación', code: 'explanation' };
+  if (/enumera|lista|menciona|nombre[ns]? \d|escrib[eií] \d|cuáles son los|cuáles son las/i.test(t))
+    return { label: 'Lista de ítems', code: 'list' };
+  if (/redacta|elabora|escribe un|compone|crea|formula|desarrolla/i.test(t))
+    return { label: 'Redacción', code: 'essay' };
+  if (/calcula|resuelve|halla|determina el valor|cuánto es|cuánto son/i.test(t))
+    return { label: 'Valor numérico', code: 'number' };
+  if (/selecciona|elige|marca|circula|indica cuál/i.test(t))
+    return { label: 'Elección', code: 'choice' };
+
+  return { label: 'Respuesta abierta', code: 'open' };
+}
+
 // ═══════════════════════════════════════
 // STEP 3 — REVISAR Y EDITAR PREGUNTAS
 // ═══════════════════════════════════════
@@ -1232,12 +1439,26 @@ function screenQuestions() {
   <div class="section-title">Revisar y editar preguntas</div>
   <div class="section-sub">Completá la respuesta correcta y palabras clave de cada pregunta</div>
 
-  ${S.questions.length > 0 ? `
-  <div class="summary-grid">
-    <div class="summary-box"><div class="summary-val">${S.questions.length}</div><div class="summary-label">Preguntas</div></div>
-    <div class="summary-box"><div class="summary-val">${S.questions.reduce((a,q)=>a+(q.points||1),0)}</div><div class="summary-label">Puntos totales</div></div>
-    <div class="summary-box"><div class="summary-val">${S.questions.filter(q=>(q.answer||'').trim()).length}</div><div class="summary-label">Con respuesta</div></div>
-  </div>` : ''}
+  ${S.questions.length > 0 ? (() => {
+    const withAns = S.questions.filter(q=>(q.answer||'').trim()).length;
+    const autoSplit = S.questions.filter(q=>q._autoSplit).length;
+    const byType = {};
+    S.questions.forEach(q => { byType[q.type] = (byType[q.type]||0) + 1; });
+    const typeBadges = Object.entries(byType).map(([t,n]) =>
+      `<span style="display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .55rem;border-radius:12px;font-size:.73rem;font-weight:600;background:var(--accent-light);color:var(--accent);margin:.15rem">${TYPE_ICONS[t]||''} ${ALL_TYPE_LABELS[t]||t} <strong style="margin-left:.15rem">${n}</strong></span>`
+    ).join('');
+    return `
+    <div class="summary-grid">
+      <div class="summary-box"><div class="summary-val">${S.questions.length}</div><div class="summary-label">Preguntas</div></div>
+      <div class="summary-box"><div class="summary-val">${S.questions.reduce((a,q)=>a+(q.points||1),0)}</div><div class="summary-label">Puntos totales</div></div>
+      <div class="summary-box"><div class="summary-val">${withAns}</div><div class="summary-label">Con respuesta</div></div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.6rem .9rem;margin-bottom:.8rem;font-size:.78rem">
+      <span style="color:var(--text2);font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-right:.4rem">Tipos detectados:</span>
+      ${typeBadges}
+      ${autoSplit > 0 ? `<span style="float:right;font-size:.7rem;color:var(--success)">✓ ${autoSplit} separadas automáticamente</span>` : ''}
+    </div>`;
+  })() : ''}
 
   ${S.sections.length > 0 ? `
   <div class="card" style="margin-bottom:1rem">
@@ -1259,8 +1480,9 @@ function screenQuestions() {
     </div>
   </div>` : ''}
 
-  <div class="tip">
-    📌 <strong>Para cada pregunta:</strong> revisá el enunciado, elegí el tipo, ingresá la respuesta correcta y las palabras clave que el sistema buscará en las respuestas del alumno.
+  <div class="tip" style="display:flex;align-items:flex-start;gap:.8rem;flex-wrap:wrap">
+    <span style="flex:1">📌 <strong>Para cada pregunta:</strong> revisá el enunciado, elegí el tipo, ingresá la respuesta correcta y las palabras clave que el sistema buscará en las respuestas del alumno.</span>
+    <button class="btn btn-secondary btn-sm" onclick="redetectAllTypes()" title="Re-analizar el tipo de todas las preguntas marcadas como Desarrollo" style="white-space:nowrap;flex-shrink:0">↺ Re-detectar tipos</button>
   </div>
 
   <div id="qList">
@@ -1298,10 +1520,13 @@ function renderQCard(q, i, typeLabels) {
       <div style="flex:1">
         <div class="flex gap-sm" style="flex-wrap:wrap;align-items:center">
           <span style="font-weight:600;font-size:.87rem">Pregunta ${i+1}</span>
+          <span style="font-size:.72rem;color:var(--text2);padding:.12rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:20px" title="Tipo detectado automáticamente">${(TYPE_ICONS[q.type]||'')}</span>
           <select class="input" style="width:auto;font-size:.78rem;padding:.2rem .5rem" onchange="S.questions[${i}].type=this.value;S.questions[${i}].options=[];renderQList()">
             ${Object.keys(tl).map(t=>`<option value="${t}" ${q.type===t?'selected':''}>${tl[t]}</option>`).join('')}
           </select>
+          <button class="btn btn-secondary btn-sm" onclick="redetectType(${i})" title="Re-detectar tipo automáticamente" style="font-size:.72rem;padding:.18rem .5rem">↺ Auto</button>
         </div>
+        ${q._autoSplit ? `<div style="font-size:.7rem;color:var(--success);margin-top:.2rem">✓ Pregunta y respuesta separadas automáticamente</div>` : ''}
       </div>
     </div>
 
@@ -1333,8 +1558,11 @@ function renderQCard(q, i, typeLabels) {
       </div>
     </div>` : `
     <div class="form-group">
-      <label>Respuesta correcta ★</label>
-      <textarea class="input" style="min-height:65px" placeholder="Escribí la respuesta completa y correcta..." oninput="S.questions[${i}].answer=this.value">${esc(q.answer)}</textarea>
+      <label style="display:flex;align-items:center;gap:.4rem">
+        Respuesta correcta ★
+        ${q.answer ? `<span style="font-size:.68rem;background:#dcfce7;color:#15803d;border-radius:10px;padding:.1rem .45rem;font-weight:600">detectada</span>` : `<span style="font-size:.68rem;background:#fef9c3;color:#92400e;border-radius:10px;padding:.1rem .45rem;font-weight:600">pendiente</span>`}
+      </label>
+      <textarea class="input" style="min-height:65px${q.answer ? ';border-color:#86efac' : ''}" placeholder="Escribí la respuesta completa y correcta..." oninput="S.questions[${i}].answer=this.value">${esc(q.answer)}</textarea>
     </div>
     <div class="form-group">
       <label>Palabras clave (separadas por comas) ★</label>
@@ -1342,9 +1570,33 @@ function renderQCard(q, i, typeLabels) {
       <div class="text-sm mt-sm">El sistema busca estas palabras en la respuesta del alumno para calcular el puntaje automático</div>
     </div>`}
 
+    ${(() => {
+      const hint = detectAnswerHint(q.text, q.type, q.answer);
+      const hintColors = {
+        choice:'#eff6ff;color:#2563eb', binary:'#f0fdf4;color:#15803d', pairs:'#fdf4ff;color:#7e22ce',
+        sequence:'#fff7ed;color:#c2410c', number:'#fefce8;color:#854d0e', word:'#f0fdf4;color:#15803d',
+        short:'#f0f9ff;color:#0369a1', medium:'#fafaf9;color:#44403c', long:'#fdf2f8;color:#86198f',
+        definition:'#eff6ff;color:#1e40af', explanation:'#fff7ed;color:#9a3412', list:'#f0fdf4;color:#166534',
+        essay:'#fdf4ff;color:#6b21a8', open:'#f9fafb;color:#6b7280'
+      };
+      const col = hintColors[hint.code] || hintColors.open;
+      return `<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.7rem;padding:.4rem .7rem;background:${col.split(';')[0].replace('background:','')};border-radius:6px;border:1px solid rgba(0,0,0,.07)">
+        <span style="font-size:.72rem;color:${col.split('color:')[1]};font-weight:600">Formato de respuesta esperado:</span>
+        <span style="font-size:.72rem;font-weight:700;color:${col.split('color:')[1]}">${hint.label}</span>
+      </div>`;
+    })()}
     <div class="form-group">
       <label>Puntaje de esta pregunta</label>
-      <input class="input" type="number" min=".5" max="100" step=".5" value="${q.points||1}" style="width:100px" oninput="S.questions[${i}].points=parseFloat(this.value)||1;updateSummary()">
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <input class="input" type="number" min=".5" max="100" step=".5" value="${q.points||1}" style="width:90px" oninput="S.questions[${i}].points=parseFloat(this.value)||1;updateSummary();renderQList()">
+        ${(() => {
+          const totalPts = S.questions.reduce((s,qq)=>s+(qq.points||1),0);
+          const weight = totalPts > 0 ? Math.round(((q.points||1)/totalPts)*100) : 0;
+          const color = weight >= 20 ? 'var(--danger)' : weight >= 10 ? 'var(--warn)' : 'var(--accent)';
+          return `<span style="font-size:.78rem;color:${color};font-weight:600" title="Peso de esta pregunta sobre el total">≈ ${weight}% del examen</span>`;
+        })()}
+      </div>
+      <div class="text-sm mt-sm">Puntos totales del examen: <strong>${S.questions.reduce((s,q)=>s+(q.points||1),0)}</strong> — el porcentaje final siempre se pondera sobre 100%</div>
     </div>
   </div>`;
 }
@@ -1410,6 +1662,29 @@ function duplicateQ(i) {
   renderQList();
   saveState();
   toast('Pregunta duplicada', 'ok');
+}
+
+function redetectType(i) {
+  const q = S.questions[i];
+  const hasOpts = q.options && q.options.length >= 2;
+  const newType = detectType(q.text, hasOpts);
+  S.questions[i].type = newType;
+  renderQList();
+  toast(`Tipo detectado: ${ALL_TYPE_LABELS[newType]}`, 'ok');
+}
+
+function redetectAllTypes() {
+  let changed = 0;
+  S.questions.forEach((q, i) => {
+    const hasOpts = q.options && q.options.length >= 2;
+    const newType = detectType(q.text, hasOpts);
+    if (newType !== q.type && q.type === 'open') { // Solo re-detectar las que están como 'open' por defecto
+      S.questions[i].type = newType;
+      changed++;
+    }
+  });
+  renderQList();
+  toast(changed > 0 ? `${changed} tipo(s) actualizados` : 'No hubo cambios en tipos', changed > 0 ? 'ok' : 'info');
 }
 
 function validateAndNext() {

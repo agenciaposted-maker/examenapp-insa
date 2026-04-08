@@ -1750,32 +1750,45 @@ function evaluateExam() {
             score = 0;
             feedback = `Incorrecto. Respuesta correcta: ${correctData.answer}`;
           }
+        } else if (q.type === 'fill') {
+          // Completar espacios en blanco: evaluación exacta/flexible
+          const evaluation = evaluateFill(studentAnswer, correctData.answer, correctData.keywords);
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 100) / 100;
+          feedback = evaluation.feedback;
         } else if (q.type === 'numeric') {
-          // Numérico: intentar comparación numérica primero, luego keywords
+          // Numérico: comparación con bandas de tolerancia progresivas
           const numResult = evaluateNumeric(studentAnswer, correctData.answer);
           if (numResult !== null) {
-            score = Math.round((numResult / 100) * (q.points || 1) * 10) / 10;
-            feedback = numResult === 100 ? 'Correcto' : numResult > 0 ? 'Aproximado (dentro del margen)' : `Incorrecto. Respuesta correcta: ${correctData.answer}`;
+            score = Math.round((numResult / 100) * (q.points || 1) * 100) / 100;
+            const numFeedback = {
+              100: 'Correcto',
+              95: 'Muy bien — diferencia mínima de redondeo',
+              85: 'Bien — resultado aproximado (dentro del 3%)',
+              70: 'Aceptable — dentro del margen del 7%',
+              50: 'Parcial — resultado aproximado (dentro del 15%)',
+              0:  `Incorrecto. Resultado esperado: ${correctData.answer}`
+            };
+            feedback = numFeedback[numResult] || `Parcial (${numResult}%)`;
           } else {
-            // Si no hay números detectables, evaluar por keywords
+            // Sin números detectables → keywords como fallback
             const evaluation = evaluateKeywords(studentAnswer, correctData.keywords, correctData.answer);
-            score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+            score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 100) / 100;
             feedback = evaluation.feedback;
           }
         } else if (q.type === 'match') {
           // Relacionar columnas: evaluar pares
           const evaluation = evaluateMatch(studentAnswer, correctData.answer, correctData.keywords);
-          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 100) / 100;
           feedback = evaluation.feedback;
         } else if (q.type === 'order') {
           // Ordenar: evaluar secuencia
           const evaluation = evaluateOrder(studentAnswer, correctData.answer);
-          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 100) / 100;
           feedback = evaluation.feedback;
         } else {
-          // Desarrollo/Completar: evaluar por palabras clave con ponderación
+          // Desarrollo/abierto: evaluar por keywords ponderadas
           const evaluation = evaluateKeywords(studentAnswer, correctData.keywords, correctData.answer);
-          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 10) / 10;
+          score = Math.round((evaluation.percentage / 100) * (q.points || 1) * 100) / 100;
           feedback = evaluation.feedback;
         }
       } catch(evalErr) {
@@ -2472,72 +2485,135 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
 // EVALUACIÓN NUMÉRICA
 // ═══════════════════════════════════════
 function evaluateNumeric(studentAnswer, correctAnswer) {
-  // Extraer números de ambas respuestas (soporta decimales con . o ,)
-  const extractNumber = s => {
-    if (!s) return null;
-    const cleaned = (s + '').replace(',', '.').replace(/[^\d.\-]/g, ' ').trim();
-    const match = cleaned.match(/-?\d+\.?\d*/);
-    return match ? parseFloat(match[0]) : null;
+  // Extraer todos los números del texto (soporta decimales con . o ,)
+  const extractNumbers = s => {
+    if (!s) return [];
+    const cleaned = (s + '').replace(/,/g, '.').replace(/[^\d.\-]/g, ' ');
+    const matches = cleaned.match(/-?\d+\.?\d*/g) || [];
+    return matches.map(parseFloat).filter(n => !isNaN(n));
   };
 
-  const correct = extractNumber(correctAnswer);
-  const student = extractNumber(studentAnswer);
+  const correctNums = extractNumbers(correctAnswer);
+  const studentNums = extractNumbers(studentAnswer);
+  if (correctNums.length === 0 || studentNums.length === 0) return null;
 
-  if (correct === null || student === null) return null;
+  const correct = correctNums[0];
+  // El resultado suele ser el último número que escribe el alumno
+  const student = studentNums[studentNums.length - 1];
 
+  if (correct === 0) return student === 0 ? 100 : 0;
   if (student === correct) return 100;
 
-  // Margen de tolerancia del 2%
-  const tolerance = Math.abs(correct) * 0.02;
-  if (tolerance > 0 && Math.abs(student - correct) <= tolerance) return 50;
-
+  const diff = Math.abs(student - correct) / Math.abs(correct);
+  if (diff <= 0.001) return 100;  // diferencia de redondeo
+  if (diff <= 0.01)  return 95;   // dentro del 1%
+  if (diff <= 0.03)  return 85;   // dentro del 3%
+  if (diff <= 0.07)  return 70;   // dentro del 7%
+  if (diff <= 0.15)  return 50;   // dentro del 15%
   return 0;
+}
+
+// ═══════════════════════════════════════
+// EVALUACIÓN DE COMPLETAR (FILL)
+// ═══════════════════════════════════════
+function evaluateFill(studentAnswer, correctAnswer, keywordsStr) {
+  if (!studentAnswer || !studentAnswer.trim())
+    return { percentage: 0, feedback: 'Sin respuesta' };
+
+  const norm = s => (s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const sNorm = norm(studentAnswer);
+  const cNorm = norm(correctAnswer);
+
+  if (!cNorm) return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
+
+  // Exacto
+  if (sNorm === cNorm) return { percentage: 100, feedback: 'Correcto' };
+
+  const sWords = sNorm.split(' ').filter(w => w.length > 1);
+  const cWords = cNorm.split(' ').filter(w => w.length > 1);
+
+  if (cWords.length === 1) {
+    // Raíz (stemming)
+    if (stemSpanish(cNorm) === stemSpanish(sNorm))
+      return { percentage: 95, feedback: 'Correcto (variante aceptada)' };
+    // Sinónimo
+    const syns = findSynonyms(cNorm).map(norm);
+    if (syns.includes(sNorm) || syns.map(stemSpanish).includes(stemSpanish(sNorm)))
+      return { percentage: 90, feedback: 'Correcto (sinónimo aceptado)' };
+    // Tipográfico
+    const maxDist = cNorm.length <= 4 ? 1 : cNorm.length <= 7 ? 2 : 3;
+    if (levenshtein(cNorm, sNorm) <= maxDist)
+      return { percentage: 85, feedback: 'Correcto (error tipográfico menor)' };
+    // Contenido parcial
+    if (sNorm.includes(cNorm) || cNorm.includes(sNorm))
+      return { percentage: 60, feedback: 'Parcialmente correcto' };
+    return { percentage: 0, feedback: `Incorrecto. Respuesta: ${correctAnswer}` };
+  }
+
+  // Respuesta de varias palabras
+  let matched = 0;
+  for (const cw of cWords) {
+    if (flexibleMatch(cw, sWords, sNorm).found) matched++;
+  }
+  const pct = Math.round((matched / cWords.length) * 100);
+  if (pct === 100) return { percentage: 100, feedback: 'Correcto' };
+  if (pct >= 70)   return { percentage: pct, feedback: `Parcial: ${matched}/${cWords.length} palabras correctas` };
+  if (pct >= 40)   return { percentage: Math.min(pct, 50), feedback: `Incompleto: ${matched}/${cWords.length} palabras` };
+  return { percentage: 0, feedback: `Incorrecto. Respuesta: ${correctAnswer}` };
 }
 
 // ═══════════════════════════════════════
 // EVALUACIÓN DE RELACIONAR COLUMNAS
 // ═══════════════════════════════════════
 function evaluateMatch(studentAnswer, correctAnswer, keywordsStr) {
-  if (!studentAnswer || studentAnswer.trim().length < 2) {
+  if (!studentAnswer || studentAnswer.trim().length < 2)
     return { percentage: 0, feedback: 'Sin respuesta' };
-  }
+  if (!correctAnswer || correctAnswer.trim().length < 2)
+    return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
 
-  // Si no hay respuesta correcta definida, caer en keywords
-  if (!correctAnswer || correctAnswer.trim().length < 2) {
-    const kEval = evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
-    return kEval;
-  }
-
-  // Normalizar: quitar acentos, minúsculas, colapsar espacios
   const norm = s => (s || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ').trim();
-
-  // Separar pares de la respuesta correcta por salto de línea o punto y coma
-  const correctPairs = correctAnswer.split(/[\n;]+/).map(p => norm(p)).filter(Boolean);
-  if (correctPairs.length === 0) {
-    return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
-  }
+    .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
   const studentNorm = norm(studentAnswer);
+  const sWords = studentNorm.split(' ').filter(w => w.length > 1);
+
+  // Separar pares por salto de línea, punto y coma, o coma
+  const correctPairs = correctAnswer.split(/[\n;,]+/).map(p => norm(p)).filter(Boolean);
+  if (correctPairs.length === 0)
+    return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
+
   let matched = 0;
   for (const pair of correctPairs) {
-    // Buscar si el alumno mencionó ambos elementos del par
-    const parts = pair.split(/[-–:=]/).map(p => p.trim()).filter(Boolean);
+    // Separar el par en elementos A y B (→ - = : / Tab)
+    const parts = pair.split(/\s*(?:→|[-–—:=/]|\t)\s*/).map(p => p.trim()).filter(Boolean);
+
     if (parts.length >= 2) {
       const a = parts[0], b = parts[parts.length - 1];
-      if (studentNorm.includes(a) && studentNorm.includes(b)) matched++;
-    } else if (studentNorm.includes(pair)) {
-      matched++;
+      // Ambos elementos deben estar en la respuesta del alumno (exacto o flexible)
+      const foundA = flexibleMatch(a, sWords, studentNorm).found || studentNorm.includes(a);
+      const foundB = flexibleMatch(b, sWords, studentNorm).found || studentNorm.includes(b);
+      if (foundA && foundB) {
+        matched++;
+      } else if (foundA || foundB) {
+        matched += 0.5; // crédito parcial por un elemento del par
+      }
+    } else {
+      if (flexibleMatch(pair, sWords, studentNorm).found || studentNorm.includes(pair))
+        matched++;
     }
   }
 
-  const percentage = Math.round((matched / correctPairs.length) * 100);
+  const percentage = Math.min(100, Math.round((matched / correctPairs.length) * 100));
+  const matchedWhole = Math.floor(matched);
   const feedback = percentage === 100
-    ? 'Correcto'
-    : percentage > 0
-      ? `Parcial: ${matched} de ${correctPairs.length} pares correctos`
-      : `Incorrecto. Respuesta correcta: ${correctAnswer}`;
+    ? 'Correcto — todos los pares relacionados'
+    : percentage >= 50
+      ? `Parcial: ${matchedWhole}/${correctPairs.length} pares correctos (${percentage}%)`
+      : `Incorrecto — ${matchedWhole}/${correctPairs.length} pares. Respuesta: ${correctAnswer}`;
 
   return { percentage, feedback };
 }
@@ -2566,123 +2642,164 @@ function evaluateOrder(studentAnswer, correctAnswer) {
     return { percentage: 0, feedback: 'Pregunta sin respuesta correcta definida' };
   }
 
-  // Contar ítems en la posición correcta
-  const minLen = Math.min(correctItems.length, studentItems.length);
-  let inOrder = 0;
-  for (let i = 0; i < minLen; i++) {
-    if (studentItems[i] === correctItems[i] ||
-        correctItems[i].includes(studentItems[i]) ||
-        (studentItems[i].length > 3 && correctItems[i].includes(studentItems[i].slice(0, -1)))) {
-      inOrder++;
+  // Función para comparar ítems con flexibilidad
+  const itemsMatch = (a, b) => {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.includes(b) || b.includes(a)) return true;
+    // Stemming para mayor flexibilidad
+    if (stemSpanish(a) === stemSpanish(b)) return true;
+    // Levenshtein para errores tipográficos
+    if (a.length >= 4 && levenshtein(a, b) <= 2) return true;
+    return false;
+  };
+
+  let score = 0;
+  const total = correctItems.length;
+
+  for (let i = 0; i < total; i++) {
+    const cItem = correctItems[i];
+    const sItem = studentItems[i];
+
+    if (sItem !== undefined && itemsMatch(cItem, sItem)) {
+      score += 1;         // posición exacta correcta
+    } else {
+      // Buscar si el ítem está en posición adyacente (±1) → crédito parcial
+      const adjPos = [i - 1, i + 1].filter(p => p >= 0 && p < studentItems.length);
+      if (adjPos.some(p => itemsMatch(cItem, studentItems[p]))) {
+        score += 0.5;     // posición adyacente
+      }
+      // El ítem está en algún lugar de la respuesta pero fuera de orden → crédito mínimo
+      else if (studentItems.some(s => itemsMatch(cItem, s))) {
+        score += 0.25;
+      }
     }
   }
 
-  const percentage = Math.round((inOrder / correctItems.length) * 100);
+  const percentage = Math.min(100, Math.round((score / total) * 100));
+  const exactCount = Math.floor(score);
+
   const feedback = percentage === 100
     ? 'Correcto — orden exacto'
-    : percentage > 0
-      ? `Parcial: ${inOrder} de ${correctItems.length} ítems en orden correcto`
-      : `Incorrecto. Orden correcto: ${correctAnswer}`;
+    : percentage >= 70
+      ? `Bien — ${exactCount}/${total} ítems en orden correcto (${percentage}%)`
+      : percentage > 0
+        ? `Parcial — ${exactCount}/${total} ítems en orden correcto (${percentage}%)`
+        : `Incorrecto. Orden correcto: ${correctAnswer}`;
 
   return { percentage, feedback };
 }
 
+// Lista extensa de stopwords en español
+const STOPWORDS_ES = new Set([
+  'el','la','los','las','un','una','unos','unas','lo','al','del',
+  'que','de','en','y','a','es','se','no','te','le','me','mi','tu','su',
+  'con','por','para','como','más','pero','si','ya','o','ni','fue','ser',
+  'hay','han','son','era','sin','sus','les','nos','muy','todo','esta',
+  'este','ese','esa','esos','esas','estos','estas','aquel','aquella',
+  'cuando','donde','quien','cual','cuyo','cuya','cada','tanto','ante',
+  'bajo','tras','entre','hasta','desde','sobre','según','mediante',
+  'algo','alguien','nada','nadie','mucho','poco','varios','algún',
+  'dicho','dicha','mismo','misma','tal','así','bien','mal','sí',
+  'porque','pues','aunque','sino','embargo','también','además',
+  'ahora','antes','después','siempre','nunca','aquí','allí','donde',
+  'have','has','had','the','and','for','are','but','not','you','all',
+  'can','her','was','one','our','out','day','get','has','him','his',
+  'how','man','new','now','old','see','two','way','who','boy','did',
+  'its','let','put','say','she','too','use'
+]);
+
 function evaluateKeywords(studentAnswer, keywordsStr, correctAnswer) {
-  // Sin respuesta = 0 puntos
-  if (!studentAnswer || studentAnswer.trim().length < 3) {
+  if (!studentAnswer || studentAnswer.trim().length < 2)
     return { percentage: 0, feedback: 'Sin respuesta', matches: [] };
-  }
 
-  // Normalizar texto
-  const normalize = (str) => {
-    return (str || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Quitar acentos
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  };
+  const norm = str => (str || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-  const normalizedAnswer = normalize(studentAnswer);
-  const answerWords = normalizedAnswer.split(' ').filter(w => w.length > 2);
+  // Extraer palabras significativas filtradas por stopwords y longitud mínima
+  const significantWords = text => norm(text).split(' ')
+    .filter(w => w.length >= 3 && !STOPWORDS_ES.has(w));
 
-  // Obtener palabras clave
-  const keywords = (keywordsStr || '')
-    .split(',')
-    .map(k => normalize(k.trim()))
-    .filter(k => k.length > 2);
+  const sNorm   = norm(studentAnswer);
+  const sWords  = significantWords(studentAnswer);
 
-  // Si no hay palabras clave, usar palabras de la respuesta correcta
+  // ── Construir lista de keywords ──────────────────────────────
+  let keywords = (keywordsStr || '').split(',')
+    .map(k => norm(k.trim())).filter(k => k.length >= 2);
+
+  // Si no hay keywords definidas → extraer de la respuesta correcta
   if (keywords.length === 0) {
-    const correctNorm = normalize(correctAnswer);
+    const cNorm = norm(correctAnswer);
+    if (!cNorm || cNorm.length < 2)
+      return { percentage: 0, feedback: 'Sin criterio de evaluación', matches: [] };
 
-    // Sin criterio de evaluación = 0 puntos
-    if (!correctNorm || correctNorm.length < 3) {
-      return { percentage: 0, feedback: 'Sin criterio de evaluación definido', matches: [] };
-    }
+    // Palabras significativas de la respuesta correcta
+    keywords = significantWords(correctAnswer);
 
-    // Extraer palabras significativas de la respuesta correcta (más de 4 letras)
-    const correctWords = correctNorm.split(' ').filter(w => w.length > 2);
+    // Deduplicar por raíz (no evaluar palabras redundantes)
+    const seenStems = new Set();
+    keywords = keywords.filter(w => {
+      const stem = stemSpanish(w);
+      if (seenStems.has(stem)) return false;
+      seenStems.add(stem);
+      return true;
+    });
 
-    if (correctWords.length === 0) {
-      return { percentage: 0, feedback: 'Sin criterio de evaluación definido', matches: [] };
-    }
-
-    // Buscar coincidencias flexibles
-    const matches = [];
-    const matchDetails = [];
-
-    for (const cw of correctWords) {
-      const result = flexibleMatch(cw, answerWords, normalizedAnswer);
-      if (result.found) {
-        matches.push(cw);
-        matchDetails.push(`${cw} (${result.type}: "${result.matched}")`);
-      }
-    }
-
-    const percentage = Math.round((matches.length / correctWords.length) * 100);
-
-    if (percentage === 0) {
-      return { percentage: 0, feedback: 'No coincide con la respuesta esperada', matches: [] };
-    }
-
-    return {
-      percentage,
-      feedback: `${matches.length}/${correctWords.length} términos correctos`,
-      matches,
-      matchDetails,
-    };
+    if (keywords.length === 0)
+      return { percentage: 0, feedback: 'Sin criterio de evaluación', matches: [] };
   }
 
-  // Evaluar palabras clave encontradas con búsqueda flexible
-  const matches = [];
-  const missing = [];
-  const matchDetails = [];
+  // ── Ponderar keywords por importancia (longitud como proxy) ──
+  // Palabras largas = más específicas = más peso
+  const totalWeight = keywords.reduce((s, k) => s + Math.max(1, k.length - 2), 0);
 
-  keywords.forEach(kw => {
-    const result = flexibleMatch(kw, answerWords, normalizedAnswer);
+  let earnedWeight = 0;
+  const matches = [], missing = [], matchDetails = [];
+
+  for (const kw of keywords) {
+    const kwWeight = Math.max(1, kw.length - 2);
+    const result = flexibleMatch(kw, sWords, sNorm);
     if (result.found) {
       matches.push(kw);
-      matchDetails.push(`${kw} (${result.type}: "${result.matched}")`);
+      earnedWeight += kwWeight;
+      matchDetails.push(`${kw} [${result.type}]`);
     } else {
-      missing.push(kw);
+      // Intentar con sinónimos inline
+      const syns = findSynonyms(kw);
+      let synFound = false;
+      for (const syn of syns) {
+        const synNorm = norm(syn);
+        if (synNorm !== kw) {
+          const synResult = flexibleMatch(synNorm, sWords, sNorm);
+          if (synResult.found) {
+            matches.push(kw);
+            earnedWeight += Math.round(kwWeight * 0.85); // sinónimo = 85% del peso
+            matchDetails.push(`${kw} [sinónimo: ${syn}]`);
+            synFound = true;
+            break;
+          }
+        }
+      }
+      if (!synFound) missing.push(kw);
     }
-  });
+  }
 
-  const percentage = Math.round((matches.length / keywords.length) * 100);
+  const percentage = Math.min(100, Math.round((earnedWeight / totalWeight) * 100));
 
-  let feedback = '';
-  if (percentage === 100) {
-    feedback = 'Excelente. Todos los conceptos clave identificados.';
-  } else if (percentage >= 70) {
-    feedback = `Muy bien. ${matches.length}/${keywords.length} conceptos clave.`;
-  } else if (percentage >= 50) {
-    feedback = `Regular. ${matches.length}/${keywords.length} conceptos clave.`;
-  } else if (percentage > 0) {
-    feedback = `Insuficiente. ${matches.length}/${keywords.length} conceptos clave.`;
+  let feedback;
+  if (matches.length === 0) {
+    feedback = 'Incorrecto — no se encontraron los conceptos esperados.';
+  } else if (percentage === 100) {
+    feedback = 'Excelente — todos los conceptos clave identificados.';
+  } else if (percentage >= 80) {
+    feedback = `Muy bien — ${matches.length}/${keywords.length} conceptos (${percentage}%).`;
+  } else if (percentage >= 60) {
+    feedback = `Bien — ${matches.length}/${keywords.length} conceptos (${percentage}%).`;
+  } else if (percentage >= 40) {
+    feedback = `Regular — ${matches.length}/${keywords.length} conceptos (${percentage}%).`;
   } else {
-    feedback = 'Incorrecto. No se encontraron los conceptos esperados.';
+    feedback = `Insuficiente — ${matches.length}/${keywords.length} conceptos (${percentage}%).`;
   }
 
   return { percentage, feedback, matches, missing, matchDetails };
@@ -2696,7 +2813,7 @@ function screenResults() {
   const isSuspended = S.suspended || r.suspended;
   const suspendReason = S.suspendReason || r.suspendReason || '';
 
-  // Si fue suspendido, nota = 0
+  // Nota en escala 0-10 (convención MINED El Salvador)
   const nota = isSuspended ? '0.0' : (r.percentage / 10).toFixed(1);
   const aprobado = !isSuspended && parseFloat(nota) >= 6;
   const grade = isSuspended ? 'suspended' : (aprobado ? 'high' : 'low');
@@ -2822,7 +2939,7 @@ function downloadResults() {
   const isSuspended = S.suspended || r.suspended;
   const suspendReason = S.suspendReason || r.suspendReason || '';
 
-  // Calcular nota de 0 a 10 (0 si suspendido)
+  // Nota en escala 0-10 (convención MINED El Salvador)
   const nota = isSuspended ? '0.0' : (r.percentage / 10).toFixed(1);
   const aprobado = !isSuspended && parseFloat(nota) >= 6;
   const calificacion = isSuspended ? 'SUSPENDIDO' : (aprobado ? 'APROBADO' : 'REPROBADO');
