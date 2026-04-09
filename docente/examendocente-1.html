@@ -194,6 +194,10 @@ const defaultState = {
 
 const S = { ...defaultState, ...(loadState() || {}) };
 
+// Textos de líneas de indicaciones de sección (se llenan en detectSections,
+// se consumen en isSkipLine para que los parsers no los traten como preguntas)
+const sectionDescTexts = new Set();
+
 // ═══════════════════════════════════════
 // RENDER ENGINE
 // ═══════════════════════════════════════
@@ -594,15 +598,34 @@ function parseQuestions() {
   // Detectar secciones con pesos
   S.sections = detectSections(lines);
 
+  // Detectar bloques de instrucciones generales (llenan sectionDescTexts)
+  detectInstructionBlocks(lines);
+
+  // ── cleanedLines: en líneas que son encabezados de sección CON contenido embebido
+  //    (ej. "PARTE I: OP. MÚLTIPLE (40 pts) ¿Cuáles son...?"), exponer solo el contenido
+  //    para que los parsers puedan extraer la pregunta sin el prefijo de sección.
+  const sectionLineIdxSet = new Set(S.sections.map(s => s.lineIdx));
+  const cleanedLines = lines.map((line, i) => {
+    if (!sectionLineIdxSet.has(i)) return line;
+    // Buscar el fin del indicador de peso y tomar lo que sigue
+    const m = line.match(/^.*?[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]\s*([\s\S]+)/i);
+    if (!m) return line;
+    const rest = m[1].trim();
+    // Solo exponer si hay contenido real (pregunta u opciones)
+    if (rest.length > 10) return rest;
+    return line;
+  });
+
   // ── Ejecutar TODAS las estrategias en paralelo ──
   const strategyResults = [
-    parseInlineQA(lines),            // E0: pregunta + opciones en una línea (formato más común)
-    parseTableFormat(lines),         // E1: tabla estructurada
-    parseEjercicioFormat(lines),     // E2: Consigna/Respuesta
-    parseStandardNumbered(lines),    // E3: numerado estándar
-    parsePreguntaLabel(lines),       // E4: "Pregunta N:"
-    parseQuestionWithOptions(lines), // E5: verbos imperativos + opciones
-    parseFallback(lines),            // E6: cualquier "?"
+    parseInlineQA(cleanedLines),            // E0: pregunta + opciones en una línea (formato más común)
+    parseTableFormat(cleanedLines),         // E1: tabla estructurada
+    parseEjercicioFormat(cleanedLines),     // E2: Consigna/Respuesta
+    parseStandardNumbered(cleanedLines),    // E3: numerado estándar
+    parsePreguntaLabel(cleanedLines),       // E4: "Pregunta N:"
+    parseQuestionWithOptions(cleanedLines), // E5: verbos imperativos + opciones
+    parseFallback(cleanedLines),            // E6: cualquier "?"
+    parseVFStatements(cleanedLines),        // E7: afirmaciones V/F sin "?"
   ];
 
   // Estrategia que sola encontró más preguntas
@@ -627,9 +650,10 @@ function parseQuestions() {
   }
 
   // Ordenar preguntas combinadas por su posición real en el documento
+  // Usa cleanedLines para que las preguntas embebidas en encabezados de sección sean localizables
   const getDocPos = q => {
     const prefix = normKey(q.text).substring(0, 20);
-    const idx = lines.findIndex(l => normKey(l).includes(prefix));
+    const idx = cleanedLines.findIndex(l => normKey(l).includes(prefix));
     return idx >= 0 ? idx : 9999;
   };
   merged.sort((a, b) => getDocPos(a) - getDocPos(b));
@@ -887,8 +911,6 @@ function parseStandardNumbered(lines) {
   const aPat = /^[Rr](?:espuesta|esp|ta)[:\.\-]?\s*(.+)|^[Rr][:\.\-]\s*(.+)|^[Aa]nswer[:\.\-]?\s*(.+)/i;
   // Opciones: a) / a. / A) / A. / (a) / [a] / a- / a: y también i) ii) iii) iv)
   const optPat = /^[\(\[]?([a-fA-F]|[ivxIVX]{1,4})[\)\.\-\:\]]\s*(.+)/;
-  // Opciones en una sola línea: "a) texto  b) texto  c) texto"
-  const multiOptPat = /([a-fA-F])\)\s*([^a-fA-F\)]+)/gi;
   // Detectar respuesta correcta marcada: *a) / a)* / (correcta) / ✓
   const correctMarker = /^\*|[\*✓✔]$|\(correcta?\)|\(correct\)|\(respuesta\)/i;
 
@@ -987,7 +1009,7 @@ function romanToLetter(roman) {
 // ── ESTRATEGIA 4: "Pregunta N:" label ──
 function parsePreguntaLabel(lines) {
   const questions = [];
-  const qPat = /^pregunta\s+\d+[\.\:\-]?\s*(.+)?/i;
+  const qPat = /^pregunta\s+(?:\d+|[a-z]|[ivxIVX]{1,6})[\.\:\-]?\s*(.+)?/i;
   // Requiere separador cuando es "r" sola para no capturar texto narrativo
   const aPat = /^respuesta[:\.\-]?\s*(.+)?|^r[:\.\-]\s*(.+)?/i;
 
@@ -1023,9 +1045,6 @@ function parseQuestionWithOptions(lines) {
   const optPat = /^[\(\[]?([a-fA-F])[\)\.\-\]]\s*(.+)/;
   // Opciones V/F inline: ( ) V  ( ) F  o  [ ] Verdadero  [ ] Falso
   const vfOptPat = /[\(\[]\s*[\)\]]\s*(V|F|Verdadero|Falso|True|False|Cierto|Correcto|Incorrecto)/i;
-  // Opciones múltiples en una línea
-  const multiOptInline = /([a-fA-F])\)\s*([^a-fA-F\)]{2,})/g;
-
   // Usa la función global isQuestionLine
   const isQuestion = l => isQuestionLine(l);
 
@@ -1092,6 +1111,39 @@ function parseQuestionWithOptions(lines) {
   }
   save();
 
+  return questions;
+}
+
+// ── ESTRATEGIA 6b: Verdadero/Falso como afirmación (sin "?") ──
+// Ej: "Los tópicos ayudan a ganar tiempo. Verdadero / Falso  Respuesta: Verdadero"
+function parseVFStatements(lines) {
+  const questions = [];
+  const vfPat  = /\b(verdadero\s*[\/yo]\s*falso|v\.?\s*\/\s*f\.?)\b/i;
+  const ansPat = /\brespuesta\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|v\b|f\b)/i;
+
+  for (const line of lines) {
+    if (!line || isSkipLine(line)) continue;
+    if (!vfPat.test(line)) continue;
+    if (/\?/.test(line)) continue; // con "?" ya lo captura E6
+
+    const ansMat = line.match(ansPat);
+    let answer = '';
+    if (ansMat) {
+      const r = ansMat[1].toLowerCase();
+      answer = (r === 'verdadero' || r === 'correcto' || r === 'v') ? 'Verdadero' : 'Falso';
+    }
+
+    // Limpiar: quitar el indicador "Verdadero / Falso" y la respuesta del enunciado
+    const text = line
+      .replace(/\s*[·\.\,]?\s*verdadero\s*[\/yo]\s*falso\b.*/i, '')
+      .replace(/\s*[·\.\,]?\s*v\.?\s*\/\s*f\.?\b.*/i, '')
+      .replace(/\s*\brespuesta\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|v|f)\b.*/i, '')
+      .trim();
+
+    if (text.length > 8) {
+      questions.push({ text, answer, type: 'vf', options: [] });
+    }
+  }
   return questions;
 }
 
@@ -1173,49 +1225,181 @@ function parseFallback(lines) {
 }
 
 // ── HELPERS ──
+
+// ── Detectar bloques de "Instrucciones generales:" y añadir su contenido a sectionDescTexts ──
+// para que los parsers no los capten como preguntas
+function detectInstructionBlocks(lines) {
+  const instrPat = /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?)\s*[:\.\-]?\s*$/i;
+  // También líneas que son SOLO "Ponderación por partes:" o similares
+  const pondPat  = /^ponderaci[oó]n\s+(por\s+partes?|total|del\s+examen)\s*[:\.\-]?\s*$/i;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] || '').trim();
+    if (!instrPat.test(line) && !pondPat.test(line)) continue;
+
+    // Recoger las líneas que siguen (hasta una pregunta numerada o sección principal)
+    // Límite conservador: 7 líneas máximo para evitar capturar preguntas como instrucciones
+    for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+      const raw = (lines[j] || '').trim();
+      if (!raw) continue;
+      // Stop al llegar a una pregunta numerada
+      if (/^\d{1,3}[.\-\)\:]/.test(raw)) break;
+      // Stop al llegar a un encabezado de sección principal
+      if (/^(parte|sección|seccion|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(raw)) break;
+      // Stop al llegar a una opción (a), b)...)
+      if (/^[\(\[]?[a-fA-F][\)\.\-\]]/.test(raw)) break;
+      // Stop si la línea tiene "?" — es una pregunta, no una instrucción
+      if (/\?/.test(raw)) break;
+      // Stop si la línea es muy larga y no tiene el patrón de instrucción simple
+      // (las instrucciones son frases cortas; las preguntas son más largas y específicas)
+      if (raw.length > 120) break;
+      // Marcar como indicación → isSkipLine la ignorará en los parsers
+      sectionDescTexts.add(raw);
+    }
+  }
+}
+
 // ── Detectar secciones con porcentaje/puntos desde las líneas ──
 function detectSections(lines) {
+  // Limpiar textos de indicaciones del parseo anterior
+  sectionDescTexts.clear();
+
   const sections = [];
-  // Ej: "Parte I (40%)", "Sección 1 – Completar – 30 puntos", "Bloque A: 20%"
+
+  // Patrón principal: keywords + número/romano  o  numeral romano solo
+  // Ej: "Parte I (40%)", "Sección 2 – Completar – 30 puntos", "III. Desarrollo"
   const headerPat = /^(?:(parte|sección|seccion|bloque|unidad|módulo|modulo|apartado)\s+([IVXLCDM]+|\d+|[A-F])|([IVXLCDM]{2,6})\.)\s*[:\.\-]?\s*(.*)/i;
-  const pctPat    = /(\d+(?:\.\d+)?)\s*%/;
-  const ptsPat    = /(?:valor|puntos?|pts?)\s*:?\s*(\d+)|(\d+)\s*(?:puntos?|pts?)\b/i;
+
+  // Patrón alternativo: nombre de tipo solo (sin keyword/romano), CON indicador de peso
+  // Ej: "OPCIÓN MÚLTIPLE (40%)", "Verdadero y Falso – 20 puntos", "Completar (10 pts)"
+  const typeOnlyPat = /^(opci[oó]n\s+m[uú]ltiple|selecci[oó]n\s+m[uú]ltiple|opci[oó]n\s+[uú]nica|verdadero\s+(y\s+)?falso|v\.?\s*[\/y]\s*f\.?|completar?|relacion[ae]r?|unir\s+(con\s+)?flechas?|correspondencia|desarrollo|c[aá]lculo|resoluci[oó]n\s+de\s+problemas?|redacci[oó]n|pregunta(s)?\s+abiert[ao]s?|respuesta\s+corta|ensayo|compresi[oó]n\s+lectora?|lectura\s+comprensiva?|ortograf[ií]a|gram[aá]tica|conjugaci[oó]n|dictado|escritura|vocabulario|definici[oó]n|ordenar|secuencia|clasificaci[oó]n)\b.*?(?:\d+\s*%|\d+\s*(?:puntos?|pts?))/i;
+
+  const pctPat = /(\d+(?:\.\d+)?)\s*%/;
+  const ptsPat = /(?:valor|puntos?|pts?)\s*:?\s*(\d+)|(\d+)\s*(?:puntos?|pts?)\b/i;
+
+  // Helper para extraer datos comunes de una línea de encabezado
+  const extractSection = (line, name, i) => {
+    const pct = line.match(pctPat);
+    const pts = line.match(ptsPat);
+    // Separar descripción inline (texto después del indicador de peso)
+    const weightSep = line.match(/^(.*?)\s*[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]\s*(.*)/i);
+    const description = weightSep ? weightSep[2].trim() : '';
+    let weight = 0, isPoints = false;
+    if (pct)      { weight = parseFloat(pct[1]); }
+    else if (pts) { weight = parseInt(pts[1]||pts[2], 10); isPoints = true; }
+    return { id: sections.length + 1, name, description, weight, isPoints, lineIdx: i };
+  };
 
   for (let i = 0; i < lines.length; i++) {
     // Limpiar ✓ del final (viene de negritas Word) antes de analizar
     const line = (lines[i] || '').trim().replace(/\s*[✓✔\*]+\s*$/, '').trim();
     if (!line || line.length < 3 || line.length > 160) continue;
+
+    // ── Rama A: patrón principal keyword/romano ──
     const m = line.match(headerPat);
-    if (!m) continue;
+    if (m) {
+      const pct = line.match(pctPat);
+      const pts = line.match(ptsPat);
+      // Para numerales romanos solos, exigir al menos un indicador de peso
+      if (m[3] && !pct && !pts) continue;
 
-    const pct = line.match(pctPat);
-    const pts = line.match(ptsPat);
-    // Para numerales romanos solos, exigir al menos un indicador de peso
-    if (m[3] && !pct && !pts) continue;
+      const prefix = m[1] ? `${m[1]} ${m[2]}` : `${m[3]}.`;
+      const raw4 = (m[4]||'').trim();
 
-    const prefix = m[1] ? `${m[1]} ${m[2]}` : `${m[3]}.`;
-    const raw4 = (m[4]||'').trim();
+      // Separar: nombre del tipo (antes del marcador de puntos) y descripción (después)
+      const weightSep = raw4.match(/^(.*?)\s*[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]\s*(.*)/i);
+      let typeName, description;
+      if (weightSep) {
+        typeName = weightSep[1].trim();
+        const afterWeight = weightSep[2].trim();
+        // Si lo que viene después del peso contiene "?" es una pregunta embebida, no una indicación
+        description = (afterWeight.includes('?') || afterWeight.startsWith('¿')) ? '' : afterWeight;
+      } else {
+        typeName    = raw4.replace(/\d+\s*%/g,'').replace(/(?:valor|puntos?|pts?)\s*:?\s*\d+/gi,'').trim();
+        description = '';
+      }
+      const name = (typeName ? `${prefix}: ${typeName}` : prefix).replace(/\s+/g,' ').trim();
+      const pct2 = line.match(pctPat);
+      const pts2 = line.match(ptsPat);
+      let weight = 0, isPoints = false;
+      if (pct2)      { weight = parseFloat(pct2[1]); }
+      else if (pts2) { weight = parseInt(pts2[1]||pts2[2], 10); isPoints = true; }
 
-    // Separar: nombre del tipo (antes del marcador de puntos) y descripción (después)
-    const weightSep = raw4.match(/^(.*?)\s*[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]\s*(.*)/i);
-    let typeName, description;
-    if (weightSep) {
-      typeName    = weightSep[1].trim();
-      description = weightSep[2].trim();
-    } else {
-      typeName    = raw4.replace(/\d+\s*%/g,'').replace(/(?:valor|puntos?|pts?)\s*:?\s*\d+/gi,'').trim();
-      description = '';
+      sections.push({ id: sections.length + 1, name, description, weight, isPoints, lineIdx: i });
+      continue;
     }
-    const name = (typeName ? `${prefix}: ${typeName}` : prefix).replace(/\s+/g,' ').trim();
 
-    let weight = 0, isPoints = false;
-    if (pct)      { weight = parseFloat(pct[1]); }
-    else if (pts) { weight = parseInt(pts[1]||pts[2]); isPoints = true; }
-
-    sections.push({ id: sections.length + 1, name, description, weight, isPoints, lineIdx: i });
+    // ── Rama B: nombre de tipo solo, requiere peso explícito ──
+    if (typeOnlyPat.test(line)) {
+      // Extraer nombre: todo antes del paréntesis/guión de peso
+      const rawName = line.replace(/\s*[\(\[–\-]\s*\d+.*$/,'').replace(/\s+/g,' ').trim();
+      sections.push(extractSection(line, rawName, i));
+    }
   }
 
   if (sections.length === 0) return [];
+
+  // ── Deduplicar: si hay secciones con el mismo número (tabla resumen + encabezado real),
+  //    conservar solo la última aparición (el encabezado real está después de las preguntas) ──
+  {
+    const dedupMap = new Map();
+    for (const sec of sections) {
+      const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
+      // Solo deduplicar si se puede extraer un identificador claro (parte N, sección N...)
+      // Si no hay match, NO deduplicar (prefijo de 20 chars es demasiado impreciso)
+      if (!km) continue;
+      const normKey = km[0].toLowerCase().replace(/\s+/g,' ').trim();
+      const prev = dedupMap.get(normKey);
+      if (!prev || sec.lineIdx > prev.lineIdx) dedupMap.set(normKey, sec);
+    }
+    // Reconstruir: mantener secciones no deduplicadas + reemplazar las deduplicadas
+    if (dedupMap.size > 0) {
+      const nonDup = sections.filter(sec => {
+        const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
+        return !km; // secciones sin key claro → conservar siempre
+      });
+      const all = [...nonDup, ...dedupMap.values()].sort((a, b) => a.lineIdx - b.lineIdx);
+      all.forEach((s, i) => { s.id = i + 1; });
+      sections.splice(0, sections.length, ...all);
+    }
+  }
+
+  // ── Recoger indicaciones multilínea que vienen DESPUÉS del encabezado ──
+  // Patrón: líneas entre el encabezado y la primera pregunta numerada u opción
+  // que NO tienen "?" y no son separadores.  Ej:
+  //   "PARTE I: OPCIÓN MÚLTIPLE (40%)"
+  //   "Selecciona la respuesta correcta."       ← indicación
+  //   "Cada ítem vale 2 puntos."                ← indicación
+  //   "1. ¿Cuál es...?"                         ← primera pregunta → STOP
+  const isNumQuestion = l => /^\d{1,3}[.\-\)\:]/.test(l);
+  const isOption      = l => /^[\(\[]?[a-fA-F][\)\.\-\]]/.test(l);
+  const isNewHeader   = l => headerPat.test(l);
+
+  for (let s = 0; s < sections.length; s++) {
+    const sec = sections[s];
+    const nextHeaderIdx = s + 1 < sections.length ? sections[s + 1].lineIdx : lines.length;
+    const extraParts = [];
+
+    // Buscar hasta 8 líneas después del encabezado (o hasta el siguiente encabezado)
+    for (let j = sec.lineIdx + 1; j < Math.min(sec.lineIdx + 9, nextHeaderIdx); j++) {
+      const raw = (lines[j] || '').trim();
+      if (!raw) continue;
+      if (isNumQuestion(raw)) break;   // ya empezaron las preguntas
+      if (isOption(raw)) break;        // opción directa
+      if (isNewHeader(raw)) break;     // otro encabezado
+      if (/\?/.test(raw)) break;       // línea con pregunta real
+      if (isSkipLine(raw)) continue;   // separador, título, etc.
+
+      // La línea pasa todos los filtros → es una indicación de sección
+      extraParts.push(raw);
+      sectionDescTexts.add(raw);       // marcar para que isSkipLine la ignore en los parsers
+    }
+
+    if (extraParts.length > 0) {
+      const extra = extraParts.join(' ').trim();
+      sec.description = sec.description ? sec.description + ' ' + extra : extra;
+    }
+  }
 
   // Convertir puntos a porcentaje si es necesario
   if (sections.some(s => s.isPoints)) {
@@ -1254,17 +1438,25 @@ function isSkipLine(l) {
   // Quitar ✓ de cualquier posición antes de evaluar (viene de negritas Word, puede quedar en medio)
   const lClean = l.trim().replace(/\s*[✓✔]/g, '').replace(/\s+/g,' ').trim();
   const t = lClean.toLowerCase();
+  // Líneas marcadas como indicaciones de sección (detectadas en detectSections)
+  if (sectionDescTexts.size > 0 && sectionDescTexts.has(lClean)) return true;
   return /^[-─═=\s*_\.]+$/.test(l)                         // líneas separadoras
     // Secciones con o sin contenido: "PARTE III:", "PARTE III: Figuras literarias (20 puntos)"
     || /^(unidad|secci[oó]n|parte|cap[ií]tulo|tema|bloque|m[oó]dulo|lecci[oó]n|actividad)\s*([IVXLCDM]+|\d+|[A-Z])?\s*[:\.\-]/i.test(lClean)
     // Secciones solo con número/romano sin contenido posterior
     || /^(unidad|secci[oó]n|parte|cap[ií]tulo|tema|bloque|m[oó]dulo|lecci[oó]n|actividad)\s*\d*\s*$/i.test(lClean)
+    // Nombres de tipo de sección: solo se saltan si son líneas cortas (encabezado puro)
+    // o tienen indicador de peso, para no suprimir verbos imperativos como "Completa..." o "Relaciona..."
+    || (/^(opci[oó]n\s+m[uú]ltiple|selecci[oó]n\s+m[uú]ltiple|opci[oó]n\s+[uú]nica|verdadero\s+(y\s+)?falso|v\.?\s*[\/y]\s*f\.?|completar|relacion[ae]r|unir\s+(con\s+)?flechas?|correspondencia|desarrollo|c[aá]lculo|resoluci[oó]n|redacci[oó]n|respuesta\s+corta|ensayo|compresi[oó]n\s+lectora?|lectura\s+comprensiva?|ortograf[ií]a|gram[aá]tica|conjugaci[oó]n|dictado|escritura|vocabulario|definici[oó]n|clasificaci[oó]n)\b/i.test(lClean)
+      && (lClean.length < 50 || /\d+\s*%|\d+\s*(?:puntos?|pts?)/i.test(lClean)))
     || /^ejercicio\s+\d+\s*[:\.\-]?\s*$/i.test(lClean)     // "Ejercicio 1:" solo
     || /^(cuestionario|examen|evaluaci[oó]n|prueba|test|quiz)\s*\d*\s*$/i.test(lClean) // títulos
     || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante)\s*[:\.\-]?\s*_*\s*$/i.test(lClean) // campos
-    || /^(instrucciones|indicaciones|nota|observaci[oó]n|importante)\s*[:\.\-]?\s*$/i.test(lClean)
+    || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n\s*(importante)?|importante)\s*[:\.\-]?\s*$/i.test(lClean)
     || /^p[aá]gina\s+\d+/i.test(lClean)                    // números de página
     || /^\d+\s*\/\s*\d+$/.test(lClean)                     // "1/10" paginación
+    || /^p[aá]g\.?\s*\d+\s*(de\s*\d+)?$/i.test(lClean)    // "pág. 1 de 10"
+    || /^\[\s*\d+\s*\]$/.test(lClean)                      // "[1]" footnote/página
     || /^(total|puntaje|puntos|calificaci[oó]n|nota)\s*[:\.\-]?\s*\d*\s*$/i.test(lClean); // totales
 }
 
@@ -1274,6 +1466,9 @@ function isEjercicio(l) { return /^ejercicio\s+\d+/i.test(l); }
 function isQuestionLine(l) {
   if (!l || isSkipLine(l) || l.trim().length < 5) return false;
   const t = l.trim();
+
+  // Excluir líneas que son solo etiquetas de campo con valor corto (p.ej. "Nombre: Juan")
+  if (/^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante|colegio|escuela|instituci[oó]n)\s*[:.\-]\s*.{0,40}$/i.test(t)) return false;
 
   // Contiene signo de pregunta
   if (/\?/.test(t)) return true;

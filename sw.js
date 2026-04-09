@@ -1,5 +1,5 @@
 // Service Worker para ExamenApp PWA
-const CACHE_NAME = 'examenapp-v14';
+const CACHE_NAME = 'examenapp-v18';
 const ASSETS_TO_CACHE = [
   './',
   './examenalumno.html',
