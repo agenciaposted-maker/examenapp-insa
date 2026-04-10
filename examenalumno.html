@@ -206,6 +206,7 @@ textarea.input{resize:vertical;min-height:90px;line-height:1.5}
 <div class="main" id="app"></div>
 <div id="toasts"></div>
 
+<script src="wordnet-es.js"></script>
 <script>
 // ═══════════════════════════════════════
 // CONFIGURACION ANTI-TRAMPA
@@ -2384,7 +2385,8 @@ function stemSpanish(word) {
   }
 
   // Plural al final y solo si no es palabra griega/latina en -is/-us/-os
-  const isInvariant = /[aeiou][sx]$|sis$|lis$|tis$|bis$|xis$/.test(stem);
+  // [iuo]s$ cubre virus(-us), cosmos(-os), crisis(-is) pero NO casas(-as) ni nubes(-es)
+  const isInvariant = /[iuo]s$|sis$|lis$|tis$|bis$|xis$/.test(stem);
   if (!isInvariant) {
     if (stem.endsWith('es') && stem.length > 5) {
       stem = stem.slice(0, -2);
@@ -2428,21 +2430,25 @@ function levenshtein(a, b) {
 
 // Buscar sinónimo de una palabra
 function findSynonyms(word) {
-  const synonyms = [word];
+  const synonyms = new Set([word]);
 
-  // Buscar si la palabra está como clave
-  if (SINONIMOS[word]) {
-    synonyms.push(...SINONIMOS[word]);
+  // 1. WordNet-ES (MCR, ~63k palabras normalizadas)
+  if (window.WN_ES_loaded) {
+    for (const syn of window.WN_ES_lookup(word)) synonyms.add(syn);
   }
 
-  // Buscar si la palabra está como valor en algún grupo
+  // 2. Diccionario curado (dominio Literatura/Gramática)
+  if (SINONIMOS[word]) {
+    SINONIMOS[word].forEach(s => synonyms.add(s));
+  }
   for (const [key, values] of Object.entries(SINONIMOS)) {
     if (values.includes(word)) {
-      synonyms.push(key, ...values);
+      synonyms.add(key);
+      values.forEach(v => synonyms.add(v));
     }
   }
 
-  return [...new Set(synonyms)]; // Eliminar duplicados
+  return [...synonyms];
 }
 
 // Verificar si una palabra coincide con otra (flexible)
@@ -2450,22 +2456,33 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
   const kwStem = stemSpanish(keyword);
   const kwSynonyms = findSynonyms(keyword);
 
-  // 1. Coincidencia exacta en el texto completo
-  if (fullAnswer.includes(keyword)) {
+  // 1. Coincidencia exacta — palabra completa (no como subcadena de otra palabra)
+  // Regex con límite de palabra para evitar que "sol" matchee "soltaron"
+  const kwEscaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const kwWordRe  = new RegExp('(?:^|\\s)' + kwEscaped + '(?=\\s|$)');
+  if (kwWordRe.test(fullAnswer)) {
     return { found: true, type: 'exacta', matched: keyword };
   }
 
   // 2. Coincidencia por stem (raíz)
+  // startsWith solo si ambos stems tienen ≥4 chars (evita que 'sol' matchee 'soltaron')
   for (const word of answerWords) {
     const wordStem = stemSpanish(word);
-    if (kwStem === wordStem || kwStem.startsWith(wordStem) || wordStem.startsWith(kwStem)) {
+    if (kwStem === wordStem ||
+        (kwStem.length >= 4 && wordStem.length >= 4 &&
+         (kwStem.startsWith(wordStem) || wordStem.startsWith(kwStem)))) {
       return { found: true, type: 'raiz', matched: word };
     }
   }
 
   // 3. Coincidencia por sinónimos
+  // Para palabras simples: presencia como palabra completa (no substring)
+  // Para frases con espacio: substring es aceptable
   for (const syn of kwSynonyms) {
-    if (fullAnswer.includes(syn)) {
+    const synInAnswer = syn.includes(' ')
+      ? fullAnswer.includes(syn)
+      : answerWords.includes(syn);
+    if (synInAnswer) {
       return { found: true, type: 'sinonimo', matched: syn };
     }
     // También buscar stem del sinónimo
@@ -2555,7 +2572,12 @@ function evaluateFill(studentAnswer, correctAnswer, keywordsStr) {
   if (sNorm === cNorm) return { percentage: 100, feedback: 'Correcto' };
 
   const sWords = sNorm.split(' ').filter(w => w.length > 1);
-  const cWords = cNorm.split(' ').filter(w => w.length > 1);
+  // Filtrar stopwords de la respuesta correcta para no penalizar al alumno
+  // por omitir artículos/preposiciones irrelevantes (ej: "la casa" → ["casa"])
+  const cWords = cNorm.split(' ').filter(w => w.length > 1 && !STOPWORDS_ES.has(w));
+
+  // Si solo había stopwords en correctAnswer, caer a evaluación por keywords
+  if (cWords.length === 0) return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
 
   if (cWords.length === 1) {
     // Raíz (stemming)
@@ -2668,11 +2690,12 @@ function evaluateOrder(studentAnswer, correctAnswer) {
   const itemsMatch = (a, b) => {
     if (!a || !b) return false;
     if (a === b) return true;
-    if (a.includes(b) || b.includes(a)) return true;
+    // includes solo si b tiene ≥4 chars (evita que "lu" matchee "luna")
+    if (b.length >= 4 && (a.includes(b) || b.includes(a))) return true;
     // Stemming para mayor flexibilidad
     if (stemSpanish(a) === stemSpanish(b)) return true;
-    // Levenshtein para errores tipográficos
-    if (a.length >= 4 && levenshtein(a, b) <= 2) return true;
+    // Levenshtein para errores tipográficos (ambos deben ser ≥4 chars)
+    if (a.length >= 4 && b.length >= 4 && levenshtein(a, b) <= 2) return true;
     return false;
   };
 
