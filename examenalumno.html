@@ -2638,19 +2638,26 @@ function levenshtein(a, b) {
 
 // Buscar sinónimo de una palabra
 function findSynonyms(word) {
-  const synonyms = new Set([word]);
+  // Normalizar siempre antes de buscar: ambos diccionarios usan claves sin tildes y minúsculas
+  const w = (word || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const synonyms = new Set([w]);
 
   // 1. WordNet-ES (MCR, ~63k palabras normalizadas)
   if (window.WN_ES_loaded) {
-    for (const syn of window.WN_ES_lookup(word)) synonyms.add(syn);
+    try {
+      for (const syn of window.WN_ES_lookup(w)) synonyms.add(syn);
+    } catch(e) { /* wordnet falló silenciosamente, continúa con SINONIMOS */ }
   }
 
   // 2. Diccionario curado (dominio Literatura/Gramática)
-  if (SINONIMOS[word]) {
-    SINONIMOS[word].forEach(s => synonyms.add(s));
+  if (SINONIMOS[w]) {
+    SINONIMOS[w].forEach(s => synonyms.add(s));
   }
   for (const [key, values] of Object.entries(SINONIMOS)) {
-    if (values.includes(word)) {
+    if (values.includes(w)) {
       synonyms.add(key);
       values.forEach(v => synonyms.add(v));
     }
