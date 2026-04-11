@@ -2795,10 +2795,17 @@ function evaluateFill(studentAnswer, correctAnswer, keywordsStr) {
     const syns = findSynonyms(cNorm).map(norm);
     if (syns.includes(sNorm) || syns.map(stemSpanish).includes(stemSpanish(sNorm)))
       return { percentage: 90, feedback: 'Correcto (sinónimo aceptado)' };
-    // Tipográfico
-    const maxDist = cNorm.length <= 4 ? 1 : cNorm.length <= 7 ? 2 : 3;
-    if (levenshtein(cNorm, sNorm) <= maxDist)
-      return { percentage: 85, feedback: 'Correcto (error tipográfico menor)' };
+    // Tipográfico — umbral proporcional: palabras largas admiten más errores absolutos
+    // Ratio: ≤5 chars→1, ≤7→2, ≤12→3, >12→20% de la longitud (máx 5)
+    const cLen = cNorm.length;
+    const maxDist = cLen <= 5 ? 1 : cLen <= 7 ? 2 : cLen <= 12 ? 3 : Math.min(5, Math.ceil(cLen * 0.20));
+    const dist = levenshtein(cNorm, sNorm);
+    if (dist <= maxDist) {
+      // Puntaje basado en el error relativo: cuanto menor el ratio, más puntaje
+      const errorRatio = dist / cLen;
+      const score = errorRatio <= 0.10 ? 95 : errorRatio <= 0.18 ? 90 : 85;
+      return { percentage: score, feedback: 'Correcto (error tipográfico menor)' };
+    }
     // Contenido parcial
     if (sNorm.includes(cNorm) || cNorm.includes(sNorm))
       return { percentage: 60, feedback: 'Parcialmente correcto' };
