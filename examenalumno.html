@@ -113,6 +113,25 @@ textarea.input{resize:vertical;min-height:90px;line-height:1.5}
 .vf-btn:hover{background:var(--surface2)}
 .vf-btn.selected{border-color:#1a1a1a;background:#1a1a1a;color:#fff}
 
+/* MATCH (Relacionar) */
+.match-ui{display:flex;flex-direction:column;gap:.5rem;margin-top:.6rem}
+.match-row{display:flex;align-items:center;gap:.5rem}
+.match-term{flex:1;font-size:.85rem;font-weight:600;padding:.3rem 0}
+.match-arrow{color:#aaa;font-size:.9rem;flex-shrink:0}
+.match-select{flex:1.3;padding:.4rem .55rem;border:1px solid var(--border);font-family:inherit;font-size:.83rem;background:#fff;cursor:pointer}
+.match-select:focus{outline:none;border-color:#1a1a1a}
+.match-select.filled{border-color:#1a1a1a;background:#f4f4f4}
+
+/* ORDER (Ordenar) */
+.order-ui{display:flex;flex-direction:column;gap:.7rem;margin-top:.6rem}
+.order-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text2,#555);margin-bottom:.25rem}
+.order-chips{display:flex;flex-wrap:wrap;gap:.4rem;min-height:2rem}
+.order-chip{display:inline-flex;align-items:center;gap:.35rem;padding:.35rem .65rem;border:1px solid var(--border);font-size:.82rem;cursor:pointer;transition:all .15s;user-select:none}
+.order-chip.avail{background:#f8f8f8}.order-chip.avail:hover{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
+.order-chip.chosen{background:#1a1a1a;color:#fff;border-color:#1a1a1a}.order-chip.chosen:hover{background:#444}
+.order-num{width:16px;height:16px;background:#fff;color:#1a1a1a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;flex-shrink:0}
+.order-empty{font-size:.8rem;color:#bbb;font-style:italic;padding:.2rem 0}
+
 /* PROGRESS */
 .progress-container{margin-bottom:1rem;padding:.8rem;background:var(--surface);border:1px solid var(--border)}
 .progress-stats{display:flex;justify-content:space-between;font-size:.8rem;color:var(--text2);margin-bottom:.3rem}
@@ -1568,6 +1587,11 @@ function renderQuestion(q, i) {
   const answer = S.answers[q.id] || '';
   const hasAnswer = answer && answer.trim();
 
+  // Para match/order mostrar solo la primera línea del texto (la pregunta real)
+  const displayText = (q.type === 'match' || q.type === 'order') && q.text.includes('\n')
+    ? q.text.split('\n')[0]
+    : q.text;
+
   let inputHtml = '';
 
   if (q.type === 'multiple' && q.options && q.options.length > 0) {
@@ -1590,6 +1614,58 @@ function renderQuestion(q, i) {
         Falso
       </div>
     </div>`;
+  } else if (q.type === 'match') {
+    const colAm = q.text.match(/Columna\s+A\s*:\s*([^\n]+)/i);
+    const colBm = q.text.match(/Columna\s+B\s*:\s*([^\n]+)/i);
+    if (colAm && colBm) {
+      const colA = colAm[1].split('|').map(s => s.trim()).filter(Boolean);
+      const colB = colBm[1].split('|').map(s => s.trim()).filter(Boolean);
+      const cur = {};
+      if (answer) answer.split(',').forEach(p => {
+        const idx = p.indexOf('=');
+        if (idx > 0) { const a = p.slice(0, idx).trim(), b = p.slice(idx + 1).trim(); if (a) cur[a] = b; }
+      });
+      inputHtml = `<div class="match-ui" id="match-${q.id}">
+        ${colA.map(term => `
+        <div class="match-row">
+          <div class="match-term">${esc(term)}</div>
+          <div class="match-arrow">→</div>
+          <select class="match-select${cur[term] ? ' filled' : ''}" onchange="updateMatchAnswer(${q.id})">
+            <option value="">— seleccionar —</option>
+            ${colB.map(opt => `<option value="${esc(opt)}"${cur[term] === opt ? ' selected' : ''}>${esc(opt)}</option>`).join('')}
+          </select>
+        </div>`).join('')}
+      </div>`;
+    } else {
+      inputHtml = `<textarea class="input" placeholder="Escribe tu respuesta aquí..." oninput="updateAnswer(${q.id}, this.value)" style="margin-top:.6rem">${esc(answer)}</textarea>`;
+    }
+  } else if (q.type === 'order') {
+    const itemsM = q.text.match(/[ÍI]tems?\s*:\s*([^\n]+)/i);
+    if (itemsM) {
+      const allItems = itemsM[1].split('|').map(s => s.trim()).filter(Boolean);
+      const chosen = answer ? answer.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const avail  = allItems.filter(it => !chosen.includes(it));
+      inputHtml = `<div class="order-ui">
+        <div>
+          <div class="order-label">Tu orden:</div>
+          <div class="order-chips">
+            ${chosen.length === 0
+              ? '<div class="order-empty">Haz clic en los ítems de abajo para ordenarlos</div>'
+              : chosen.map((it, idx) => `<div class="order-chip chosen" title="Clic para quitar" onclick="removeFromOrder(${q.id},${idx})"><div class="order-num">${idx + 1}</div>${esc(it)}</div>`).join('')}
+          </div>
+        </div>
+        <div>
+          <div class="order-label">Ítems disponibles:</div>
+          <div class="order-chips">
+            ${avail.length === 0
+              ? '<div class="order-empty">Todos los ítems han sido ordenados</div>'
+              : avail.map((it, availIdx) => `<div class="order-chip avail" title="Clic para agregar al orden" onclick="addToOrder(${q.id},${availIdx})">${esc(it)}</div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+    } else {
+      inputHtml = `<textarea class="input" placeholder="Escribe tu respuesta aquí..." oninput="updateAnswer(${q.id}, this.value)" style="margin-top:.6rem">${esc(answer)}</textarea>`;
+    }
   } else {
     inputHtml = `
     <textarea class="input"
@@ -1602,7 +1678,7 @@ function renderQuestion(q, i) {
   <div class="question ${hasAnswer ? 'answered' : ''}" id="q${q.id}">
     <div class="q-header">
       <div class="q-num">${i + 1}</div>
-      <div class="q-text">${esc(q.text)}</div>
+      <div class="q-text">${esc(displayText)}</div>
       <div class="q-pts">${q.points} pts</div>
     </div>
     ${inputHtml}
@@ -1624,6 +1700,44 @@ function updateAnswer(qId, value) {
     card.classList.toggle('answered', value && value.trim());
   }
   updateProgress();
+}
+
+function updateMatchAnswer(qId) {
+  const container = document.getElementById('match-' + qId);
+  if (!container) return;
+  const rows    = container.querySelectorAll('.match-row');
+  const pairs   = [];
+  rows.forEach(row => {
+    const term = row.querySelector('.match-term').textContent.trim();
+    const sel  = row.querySelector('.match-select');
+    sel.classList.toggle('filled', !!sel.value);
+    if (sel.value) pairs.push(term + '=' + sel.value);
+  });
+  S.answers[qId] = pairs.join(', ');
+  saveState();
+  const card = document.getElementById('q' + qId);
+  if (card) card.classList.toggle('answered', pairs.length > 0);
+  updateProgress();
+}
+
+function addToOrder(qId, availIdx) {
+  const q = examData.questions.find(q => q.id === qId);
+  if (!q) return;
+  const itemsM = q.text.match(/[ÍI]tems?\s*:\s*([^\n]+)/i);
+  if (!itemsM) return;
+  const allItems = itemsM[1].split('|').map(s => s.trim()).filter(Boolean);
+  const cur  = S.answers[qId] ? S.answers[qId].split(',').map(s => s.trim()).filter(Boolean) : [];
+  const avail = allItems.filter(it => !cur.includes(it));
+  const item  = avail[availIdx];
+  if (item) { cur.push(item); S.answers[qId] = cur.join(', '); saveState(); render(); }
+}
+
+function removeFromOrder(qId, idx) {
+  const cur = S.answers[qId] ? S.answers[qId].split(',').map(s => s.trim()).filter(Boolean) : [];
+  cur.splice(idx, 1);
+  S.answers[qId] = cur.join(', ');
+  saveState();
+  render();
 }
 
 function updateProgress() {
@@ -2622,42 +2736,51 @@ function evaluateMatch(studentAnswer, correctAnswer, keywordsStr) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-  const studentNorm = norm(studentAnswer);
-  const sWords = studentNorm.split(' ').filter(w => w.length > 1);
+  // Parsear pares "A=B" de una cadena separada por comas
+  const parsePairs = str => str.split(/[\n;,]+/)
+    .map(p => { const idx = p.indexOf('='); return idx > 0 ? [norm(p.slice(0, idx)), norm(p.slice(idx + 1))] : null; })
+    .filter(Boolean);
 
-  // Separar pares por salto de línea, punto y coma, o coma
-  const correctPairs = correctAnswer.split(/[\n;,]+/).map(p => norm(p)).filter(Boolean);
+  const termMatch = (a, b) => {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.includes(b) || b.includes(a)) return true;
+    if (a.length >= 4 && b.length >= 4 && levenshtein(a, b) <= 2) return true;
+    return false;
+  };
+
+  const correctPairs = parsePairs(correctAnswer);
   if (correctPairs.length === 0)
     return evaluateKeywords(studentAnswer, keywordsStr, correctAnswer);
 
+  const studentPairs = parsePairs(studentAnswer);
   let matched = 0;
-  for (const pair of correctPairs) {
-    // Separar el par en elementos A y B (→ - = : / Tab)
-    const parts = pair.split(/\s*(?:→|[-–—:=/]|\t)\s*/).map(p => p.trim()).filter(Boolean);
 
-    if (parts.length >= 2) {
-      const a = parts[0], b = parts[parts.length - 1];
-      // Ambos elementos deben estar en la respuesta del alumno (exacto o flexible)
-      const foundA = flexibleMatch(a, sWords, studentNorm).found || studentNorm.includes(a);
-      const foundB = flexibleMatch(b, sWords, studentNorm).found || studentNorm.includes(b);
-      if (foundA && foundB) {
-        matched++;
-      } else if (foundA || foundB) {
-        matched += 0.5; // crédito parcial por un elemento del par
-      }
-    } else {
-      if (flexibleMatch(pair, sWords, studentNorm).found || studentNorm.includes(pair))
-        matched++;
+  if (studentPairs.length > 0) {
+    // Modo estructurado (respuesta del UI de dropdowns): verificar par A→B exacto
+    for (const [cA, cB] of correctPairs) {
+      const sp = studentPairs.find(([sA]) => termMatch(sA, cA));
+      if (sp && termMatch(sp[1], cB)) matched++;
+      // Sin crédito parcial: si seleccionó la columna correcta pero la opción incorrecta, es error
+    }
+  } else {
+    // Modo texto libre (fallback textarea): búsqueda por bolsa de palabras
+    const studentNorm = norm(studentAnswer);
+    const sWords = studentNorm.split(' ').filter(w => w.length > 1);
+    for (const [cA, cB] of correctPairs) {
+      const foundA = flexibleMatch(cA, sWords, studentNorm).found || studentNorm.includes(cA);
+      const foundB = flexibleMatch(cB, sWords, studentNorm).found || studentNorm.includes(cB);
+      if (foundA && foundB) matched++;
+      else if (foundA || foundB) matched += 0.5;
     }
   }
 
   const percentage = Math.min(100, Math.round((matched / correctPairs.length) * 100));
-  const matchedWhole = Math.floor(matched);
   const feedback = percentage === 100
     ? 'Correcto — todos los pares relacionados'
     : percentage >= 50
-      ? `Parcial: ${matchedWhole}/${correctPairs.length} pares correctos (${percentage}%)`
-      : `Incorrecto — ${matchedWhole}/${correctPairs.length} pares. Respuesta: ${correctAnswer}`;
+      ? `Parcial: ${Math.floor(matched)}/${correctPairs.length} pares correctos (${percentage}%)`
+      : `Incorrecto — ${Math.floor(matched)}/${correctPairs.length} pares. Respuesta correcta: ${correctAnswer}`;
 
   return { percentage, feedback };
 }
