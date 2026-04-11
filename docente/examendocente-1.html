@@ -1229,31 +1229,38 @@ function parseFallback(lines) {
 // ── Detectar bloques de "Instrucciones generales:" y añadir su contenido a sectionDescTexts ──
 // para que los parsers no los capten como preguntas
 function detectInstructionBlocks(lines) {
-  const instrPat = /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?)\s*[:\.\-]?\s*$/i;
-  // También líneas que son SOLO "Ponderación por partes:" o similares
+  // Captura headers solos ("Instrucciones:") e inline ("Instrucciones: Lee cada pregunta...")
+  const instrPat = /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?|aviso|recordatorio)\s*[:\.\-]?\s*(.*)/i;
   const pondPat  = /^ponderaci[oó]n\s+(por\s+partes?|total|del\s+examen)\s*[:\.\-]?\s*$/i;
+
+  // Línea claramente de pregunta real: empieza con número o con pronombre interrogativo largo
+  const isRealQuestion = raw =>
+    /^\d{1,3}[.\-\)\:]/.test(raw) ||
+    /^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|quién)\s+\S{4}/i.test(raw);
 
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] || '').trim();
-    if (!instrPat.test(line) && !pondPat.test(line)) continue;
+    const m = line.match(instrPat);
+    if (!m && !pondPat.test(line)) continue;
 
-    // Recoger las líneas que siguen (hasta una pregunta numerada o sección principal)
-    // Límite conservador: 7 líneas máximo para evitar capturar preguntas como instrucciones
-    for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+    // Si el header tiene texto inline en la misma línea, marcarlo también
+    if (m && m[7] && m[7].trim().length > 2) {
+      sectionDescTexts.add(m[7].trim());
+    }
+
+    // Recoger las líneas siguientes — límite ampliado a 20
+    for (let j = i + 1; j < Math.min(i + 21, lines.length); j++) {
       const raw = (lines[j] || '').trim();
       if (!raw) continue;
-      // Stop al llegar a una pregunta numerada
+      // Stop: pregunta numerada o encabezado de sección
       if (/^\d{1,3}[.\-\)\:]/.test(raw)) break;
-      // Stop al llegar a un encabezado de sección principal
-      if (/^(parte|sección|seccion|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(raw)) break;
-      // Stop al llegar a una opción (a), b)...)
+      if (/^(parte|secci[oó]n|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(raw)) break;
+      // Stop: opción a) b) c)...
       if (/^[\(\[]?[a-fA-F][\)\.\-\]]/.test(raw)) break;
-      // Stop si la línea tiene "?" — es una pregunta, no una instrucción
-      if (/\?/.test(raw)) break;
-      // Stop si la línea es muy larga y no tiene el patrón de instrucción simple
-      // (las instrucciones son frases cortas; las preguntas son más largas y específicas)
-      if (raw.length > 120) break;
-      // Marcar como indicación → isSkipLine la ignorará en los parsers
+      // "?" solo detiene si la línea parece realmente una pregunta (no una instrucción retórica)
+      if (/\?/.test(raw) && isRealQuestion(raw)) break;
+      // Línea excesivamente larga con estructura de pregunta específica
+      if (raw.length > 180) break;
       sectionDescTexts.add(raw);
     }
   }
@@ -1380,14 +1387,15 @@ function detectSections(lines) {
     const nextHeaderIdx = s + 1 < sections.length ? sections[s + 1].lineIdx : lines.length;
     const extraParts = [];
 
-    // Buscar hasta 8 líneas después del encabezado (o hasta el siguiente encabezado)
-    for (let j = sec.lineIdx + 1; j < Math.min(sec.lineIdx + 9, nextHeaderIdx); j++) {
+    // Buscar hasta 20 líneas después del encabezado (o hasta el siguiente encabezado)
+    for (let j = sec.lineIdx + 1; j < Math.min(sec.lineIdx + 21, nextHeaderIdx); j++) {
       const raw = (lines[j] || '').trim();
       if (!raw) continue;
-      if (isNumQuestion(raw)) break;   // ya empezaron las preguntas
-      if (isOption(raw)) break;        // opción directa
-      if (isNewHeader(raw)) break;     // otro encabezado
-      if (/\?/.test(raw)) break;       // línea con pregunta real
+      if (isNumQuestion(raw)) break;   // ya empezaron las preguntas numeradas
+      if (isOption(raw)) break;        // opción a) b) c) directa
+      if (isNewHeader(raw)) break;     // otro encabezado de sección
+      // "?" solo detiene si la línea parece una pregunta real (numerada o pronombre largo)
+      if (/\?/.test(raw) && (/^\d{1,3}[.\-\)\:]/.test(raw) || /^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|quién)\s+\S{4}/i.test(raw))) break;
       if (isSkipLine(raw)) continue;   // separador, título, etc.
 
       // La línea pasa todos los filtros → es una indicación de sección
@@ -1452,7 +1460,17 @@ function isSkipLine(l) {
     || /^ejercicio\s+\d+\s*[:\.\-]?\s*$/i.test(lClean)     // "Ejercicio 1:" solo
     || /^(cuestionario|examen|evaluaci[oó]n|prueba|test|quiz)\s*\d*\s*$/i.test(lClean) // títulos
     || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante)\s*[:\.\-]?\s*_*\s*$/i.test(lClean) // campos
-    || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n\s*(importante)?|importante)\s*[:\.\-]?\s*$/i.test(lClean)
+    || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?|aviso|recordatorio|importante)\s*[:\.\-]?\s*$/i.test(lClean)
+    // Headers de instrucción con texto en la misma línea ("Instrucciones: Lee cada...")
+    || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?)\s*[:\.\-]\s*.{5,}/i.test(lClean)
+    // Frases típicas del cuerpo de instrucciones que no son preguntas
+    || /^(lea|lee|leer|revise|revisa)\s+(detenidamente|cuidadosamente|con\s+atenci[oó]n|cada\s+pregunta|cada\s+[ií]tem)/i.test(lClean)
+    || /^(cada\s+([ií]tem|pregunta|reactivo|ejercicio)|el\s+valor\s+de\s+cada|valor\s+por\s+(pregunta|[ií]tem))\s/i.test(lClean)
+    || /^(no\s+se\s+permite|no\s+se\s+admite|est[aá]\s+prohibido)\s/i.test(lClean)
+    || /^(utilice|utiliza|use\s+|us[ae]\s+)(bol[ií]grafo|lapicero|l[aá]piz|tinta)/i.test(lClean)
+    || /^(tiempo\s*(disponible|límite|m[aá]ximo)?\s*[:\.\-]|duraci[oó]n\s*[:\.\-])/i.test(lClean)
+    || /^la\s+(prueba|evaluaci[oó]n|examen)\s+(tiene|consta|vale|tiene\s+un\s+valor)/i.test(lClean)
+    || /^(valor|puntaje|punteo)\s*[:\.\-]\s*\d+/i.test(lClean)
     || /^p[aá]gina\s+\d+/i.test(lClean)                    // números de página
     || /^\d+\s*\/\s*\d+$/.test(lClean)                     // "1/10" paginación
     || /^p[aá]g\.?\s*\d+\s*(de\s*\d+)?$/i.test(lClean)    // "pág. 1 de 10"
