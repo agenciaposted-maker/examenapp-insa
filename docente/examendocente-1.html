@@ -485,7 +485,7 @@ function htmlToTextWithBold(html) {
       return;
     }
 
-    // Fila de tabla: si la primera celda es solo un número úsalo como prefijo "N. "
+    // Fila de tabla: manejo inteligente según número de columnas
     if (tag === 'tr') {
       const cells = [];
       for (const child of node.childNodes) {
@@ -495,8 +495,17 @@ function htmlToTextWithBold(html) {
         }
       }
       if (cells.length === 0) return;
+      // Primera celda es solo número → usarlo como prefijo "N. "
       if (cells.length >= 2 && /^\d{1,3}\.?$/.test(cells[0])) {
         pushLine(`${cells[0].replace('.','').trim()}. ${cells.slice(1).join(' ')}`);
+      } else if (cells.length === 2) {
+        // Tabla de 2 columnas: cada celda en su propia línea
+        // Esto permite que parseMatchColumns detecte pares izq/der correctamente
+        cells.forEach(c => pushLine(c));
+      } else if (cells.length === 3 && /^\d{1,3}\.?$/.test(cells[0])) {
+        // 3 columnas con número: número + texto izquierdo | texto derecho
+        pushLine(`${cells[0].replace('.','').trim()}. ${cells[1]}`);
+        pushLine(cells[2]);
       } else {
         pushLine(cells.join(' '));
       }
@@ -618,14 +627,17 @@ function parseQuestions() {
 
   // ── Ejecutar TODAS las estrategias en paralelo ──
   const strategyResults = [
-    parseInlineQA(cleanedLines),            // E0: pregunta + opciones en una línea (formato más común)
-    parseTableFormat(cleanedLines),         // E1: tabla estructurada
-    parseEjercicioFormat(cleanedLines),     // E2: Consigna/Respuesta
-    parseStandardNumbered(cleanedLines),    // E3: numerado estándar
-    parsePreguntaLabel(cleanedLines),       // E4: "Pregunta N:"
-    parseQuestionWithOptions(cleanedLines), // E5: verbos imperativos + opciones
-    parseFallback(cleanedLines),            // E6: cualquier "?"
-    parseVFStatements(cleanedLines),        // E7: afirmaciones V/F sin "?"
+    parseInlineQA(cleanedLines),              // E0: pregunta + opciones en una línea (formato más común)
+    parseTableFormat(cleanedLines),           // E1: tabla estructurada
+    parseEjercicioFormat(cleanedLines),       // E2: Consigna/Respuesta
+    parseStandardNumbered(cleanedLines),      // E3: numerado estándar
+    parsePreguntaLabel(cleanedLines),         // E4: "Pregunta N:"
+    parseQuestionWithOptions(cleanedLines),   // E5: verbos imperativos + opciones
+    parseFallback(cleanedLines),              // E6: cualquier "?"
+    parseVFStatements(cleanedLines),          // E7: afirmaciones V/F sin "?"
+    parseMatchColumns(cleanedLines),          // E8: columnas para relacionar/emparejar
+    parseReadingComprehension(cleanedLines),  // E9: comprensión lectora
+    parseClozeText(cleanedLines),             // E10: texto con huecos (Cloze)
   ];
 
   // Estrategia que sola encontró más preguntas
@@ -634,7 +646,13 @@ function parseQuestions() {
   // Normalizar texto para comparar duplicados entre estrategias
   const normKey = s => (s || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim().substring(0, 40);
+    // Eliminar indicadores de valor: "(2 pts)", "[3 puntos]", "(valor: 2)", "puntaje: N"
+    .replace(/[\(\[]\s*(?:valor\s*:?\s*)?[\d.,]+\s*(?:puntos?|pts?|p)\s*[\)\]]/g, '')
+    .replace(/\bvalor\s*:?\s*[\d.,]+\s*(?:puntos?|pts?)?\b/g, '')
+    .replace(/\bpuntaje\s*:?\s*[\d.,]+\b/g, '')
+    .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
+    .replace(/^\d+\s+/, '')  // Eliminar número de pregunta al inicio (ej: "1 cual..." → "cual...")
+    .substring(0, 40);
 
   // Combinar todas las estrategias eliminando duplicados
   const seen = new Set();
@@ -661,6 +679,45 @@ function parseQuestions() {
   // Usar la combinación solo si aporta más del 10% de preguntas adicionales
   // (evita ruido cuando todas las estrategias encuentran las mismas preguntas)
   let questions = merged.length > bestSingle.length * 1.1 ? merged : bestSingle;
+
+  // ── Garantizar preguntas de tipo 'match' y eliminar sus ítems sueltos ──
+  // Si bestSingle ganó (no incluye E8), igual incorporamos las preguntas de relacionar.
+  // Luego filtramos cualquier pregunta 'open'/'fill' cuyo texto sea ítem de un match.
+  {
+    const matchQs = strategyResults[8] || []; // E8 = parseMatchColumns
+    const matchItemTexts = new Set();
+    // Recoger ítems de los match ya en questions O de E8
+    const allMatchSources = [
+      ...questions.filter(q => q.type === 'match'),
+      ...matchQs,
+    ];
+    allMatchSources.forEach(q => {
+      (q.options || []).forEach(o => matchItemTexts.add(normKey(o.text)));
+      (q._matchRight || []).forEach(r => matchItemTexts.add(normKey(r.text)));
+    });
+
+    // Filtrar ítems sueltos que son parte de un bloque de relacionar.
+    // Afecta 'open', 'fill', y 'multiple' donde la pregunta es solo el ítem de la columna
+    // (sin opciones propias, o con opciones que son los ítems del lado derecho).
+    if (matchItemTexts.size > 0) {
+      questions = questions.filter(q => {
+        if (q.type === 'match') return true;
+        const k = normKey(q.text);
+        if (!matchItemTexts.has(k)) return true;
+        return false;  // es un ítem de columna, eliminarlo
+      });
+    }
+
+    // Añadir match questions de E8 que no estén ya en la lista final
+    if (matchQs.length > 0) {
+      const seenFinal = new Set(questions.map(q => normKey(q.text)));
+      for (const mq of matchQs) {
+        if (!seenFinal.has(normKey(mq.text))) {
+          questions.push(mq);
+        }
+      }
+    }
+  }
 
   // Asignar sección a cada pregunta según su posición en el documento
   if (S.sections.length > 0) {
@@ -706,8 +763,30 @@ function parseQuestions() {
     return q;
   });
 
+  // ── Detectar y aplicar clave de respuestas (si existe al final del documento) ──
+  const answerKey = detectAnswerKey(cleanedLines);
+  if (Object.keys(answerKey).length > 0) {
+    questions = questions.map((q, idx) => {
+      const n = idx + 1;
+      if (answerKey[n] && !(q.answer || '').trim()) {
+        return { ...q, answer: answerKey[n], _fromKey: true };
+      }
+      return q;
+    });
+  }
+
   // Separar preguntas y respuestas que vengan juntas en el texto
   questions = autoSplitQA(questions);
+
+  // ── Post-procesamiento final: extraer valores de puntos aún no extraídos ──
+  questions = questions.map(q => {
+    if (q.points && q.points > 0) return q; // ya tiene puntos asignados
+    const { value, clean: cleanText } = extractQuestionValue(q.text || '');
+    if (value !== null) {
+      return { ...q, points: value, text: cleanText };
+    }
+    return q;
+  });
 
   // Limpiar y asignar IDs
   S.questions = questions
@@ -859,17 +938,17 @@ function parseEjercicioFormat(lines) {
   const questions = [];
   let i = 0;
 
-  const isConsigna  = l => /^consigna\s*:/i.test(l);
-  const isRespuesta = l => /^respuesta\s*(\/\s*soluci[oó]n)?\s*:/i.test(l);
+  const isConsigna  = l => /^(consigna|enunciado|pregunta|ítem|item|punto|reactivo|caso)\s*[:\.\-]?\s*/i.test(l);
+  const isRespuesta = l => /^(respuesta|soluci[oó]n|resp|rta|clave|answer|key)\s*(\/\s*(soluci[oó]n|answer))?\s*[:\.\-]/i.test(l);
 
   // Verificar si hay este formato
-  if (!lines.some(l => isConsigna(l) || isRespuesta(l))) return [];
+  if (!lines.some(l => isConsigna(l) && /^(consigna|enunciado|reactivo)\s*:/i.test(l))) return [];
 
   while (i < lines.length) {
     const line = lines[i];
 
     if (isConsigna(line)) {
-      let qText = line.replace(/^consigna\s*:\s*/i,'');
+      let qText = line.replace(/^(consigna|enunciado|pregunta|ítem|item|punto|reactivo|caso)\s*[:\.\-]?\s*/i,'');
       let aText = '';
       i++;
 
@@ -882,7 +961,7 @@ function parseEjercicioFormat(lines) {
 
       // Respuesta
       if (i < lines.length && isRespuesta(lines[i])) {
-        aText = lines[i].replace(/^respuesta\s*(\/\s*soluci[oó]n)?\s*:\s*/i,'');
+        aText = lines[i].replace(/^(respuesta|soluci[oó]n|resp|rta|clave|answer|key)\s*(\/\s*(soluci[oó]n|answer))?\s*[:\.\-]\s*/i,'');
         i++;
         while (i < lines.length && !isConsigna(lines[i]) && !isEjercicio(lines[i])) {
           const l = lines[i];
@@ -892,7 +971,10 @@ function parseEjercicioFormat(lines) {
       }
 
       if (qText.trim().length > 3) {
-        questions.push({ text: qText.trim(), answer: aText.trim(), type: detectType(qText) });
+        const { value: qValue, clean: cleanQ } = extractQuestionValue(qText.trim());
+        const q = { text: cleanQ || qText.trim(), answer: aText.trim(), type: detectType(qText) };
+        if (qValue !== null) q.points = qValue;
+        questions.push(q);
       }
       continue;
     }
@@ -944,7 +1026,12 @@ function parseStandardNumbered(lines) {
 
     if (qm && !om) { // Es pregunta (no es opción que empieza con letra)
       save();
-      let qText = qm[2];
+      // Extraer indicador de valor/puntos si está embebido en la línea
+      const { value: qValue, clean: qLineClean } = extractQuestionValue(qm[2]);
+      let qText = qLineClean !== undefined ? qLineClean : qm[2];
+      if (qValue !== null && current === null) {
+        // Se guardará en el objeto current cuando se cree abajo
+      }
       // Detectar opciones inline: "¿Pregunta? a) opt1 b) opt2 c) opt3 d) opt4"
       const inlineOptStart = qText.search(/\s+[a-fA-F]\)\s+/);
       if (inlineOptStart >= 0 && /\s+[a-fA-F]\)\s+.+\s+[a-fA-F]\)\s+/.test(qText)) {
@@ -971,6 +1058,7 @@ function parseStandardNumbered(lines) {
         if (dashSplit) { qText = dashSplit[1].trim(); inlineAnswer = dashSplit[2].trim(); }
       }
       current = { text: qText, answer: inlineAnswer, type: 'open', _autoSplit: !!inlineAnswer };
+      if (typeof qValue !== 'undefined' && qValue !== null) current.points = qValue;
       mode = 'q';
     } else if (am && current) {
       current.answer = (am[1]||am[2]||am[3]||'').trim();
@@ -991,8 +1079,16 @@ function parseStandardNumbered(lines) {
       opts.push({ letter: letterNorm, text: om[2].trim(), correct: isCorrect });
       mode = 'q'; // seguimos en modo pregunta para capturar más opciones
     } else if (current) {
-      if (mode === 'q') current.text += ' ' + line;
-      else if (mode === 'a') current.answer += ' ' + line;
+      // Instrucción de match/cloze → inicia un bloque distinto; guardar pregunta actual y parar
+      const isMatchInstr = /\b(relaciona|une\s+(con\s+)?flechas?|empareja|conecta|asocia|une\s+cada|traza\s+l[ií]nea|haz\s+corresponder|columna\s*[abABIi]+)\b/i.test(line);
+      const isClozeInstr = /\b(completa|rellena|llena)\s+(los?\s+)?(espacios?|huecos?|blancos?|guiones?)/i.test(line);
+      if (isMatchInstr || isClozeInstr) {
+        save();
+      } else if (mode === 'q') {
+        current.text += ' ' + line;
+      } else if (mode === 'a') {
+        current.answer += ' ' + line;
+      }
     }
   }
   save();
@@ -1116,32 +1212,75 @@ function parseQuestionWithOptions(lines) {
 
 // ── ESTRATEGIA 6b: Verdadero/Falso como afirmación (sin "?") ──
 // Ej: "Los tópicos ayudan a ganar tiempo. Verdadero / Falso  Respuesta: Verdadero"
+// También: bloques numerados "1. La tierra es redonda. V ( ) F ( )"
 function parseVFStatements(lines) {
   const questions = [];
-  const vfPat  = /\b(verdadero\s*[\/yo]\s*falso|v\.?\s*\/\s*f\.?)\b/i;
-  const ansPat = /\brespuesta\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|v\b|f\b)/i;
+  const vfPat  = /\b(verdadero\s*[\/yo]\s*falso|v\.?\s*\/\s*f\.?|cierto\s*(o|[\/])\s*(falso|incorrecto)|true\s*(or|\/)\s*false)\b/i;
+  const ansPat = /\b(?:respuesta|clave|answer)\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|cierto|v\b|f\b|true\b|false\b)/i;
+  // Marcas de V/F inline: "( ) V  (✓) F" o "[ ] Verdadero"
+  const vfCheckPat = /[\(\[]\s*[✓✔x]\s*[\)\]]\s*(verdadero|falso|v|f|cierto|incorrecto|true|false)\b/i;
+  // Afirmación numerada: "1. Texto de afirmación. V ( ) F" o "1. Texto — Verdadero"
+  const numberedVFPat = /^(\d{1,3})[.\-\)\:]\s+(.{5,}?)\s*[\.!]?\s*[VF]\s*[\(\[]\s*[\)\]]/i;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!line || isSkipLine(line)) continue;
-    if (!vfPat.test(line)) continue;
-    if (/\?/.test(line)) continue; // con "?" ya lo captura E6
 
-    const ansMat = line.match(ansPat);
-    let answer = '';
-    if (ansMat) {
-      const r = ansMat[1].toLowerCase();
-      answer = (r === 'verdadero' || r === 'correcto' || r === 'v') ? 'Verdadero' : 'Falso';
+    // Caso A: línea con V/F explícito (ya manejado originalmente)
+    if (vfPat.test(line) && !/\?/.test(line)) {
+      // Ver si hay respuesta marcada con checkmark inline: "( ✓ ) Verdadero"
+      const checkMat = line.match(vfCheckPat);
+      const ansMat   = line.match(ansPat);
+      let answer = '';
+
+      if (checkMat) {
+        const r = checkMat[1].toLowerCase();
+        answer = (r === 'verdadero' || r === 'cierto' || r === 'correcto' || r === 'v' || r === 'true') ? 'Verdadero' : 'Falso';
+      } else if (ansMat) {
+        const r = ansMat[1].toLowerCase();
+        answer = (r === 'verdadero' || r === 'correcto' || r === 'cierto' || r === 'v' || r === 'true') ? 'Verdadero' : 'Falso';
+      }
+
+      // También detectar "Verdadero" o "Falso" marcado en negrita (✓) al final
+      if (!answer) {
+        const boldVFMat = line.match(/\b(verdadero|falso|cierto|incorrecto)\s*✓/i);
+        if (boldVFMat) {
+          const r = boldVFMat[1].toLowerCase();
+          answer = (r === 'verdadero' || r === 'cierto') ? 'Verdadero' : 'Falso';
+        }
+      }
+
+      // Limpiar: quitar indicadores V/F y marcas de respuesta
+      const text = line
+        .replace(/[\(\[]\s*[✓✔x]?\s*[\)\]]/g, '')
+        .replace(/\s*[·\.\,]?\s*verdadero\s*[\/yo]\s*falso\b.*/i, '')
+        .replace(/\s*[·\.\,]?\s*cierto\s*(o|\/)\s*(falso|incorrecto)\b.*/i, '')
+        .replace(/\s*[·\.\,]?\s*true\s*(or|\/)\s*false\b.*/i, '')
+        .replace(/\s*[·\.\,]?\s*v\.?\s*\/\s*f\.?\b.*/i, '')
+        .replace(/\s*\b(?:respuesta|clave|answer)\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|cierto|v|f|true|false)\b.*/i, '')
+        .replace(/\s*(verdadero|falso|cierto|incorrecto)\s*✓\s*$/i, '')
+        .replace(/\s+/g, ' ').trim();
+
+      // Quitar número de pregunta si lo tiene
+      const qNum = text.match(/^(\d{1,3})[.\-\)\:]\s*/);
+      const cleanText = qNum ? text.slice(qNum[0].length).trim() : text;
+
+      if (cleanText.length > 8) {
+        const { value: qValue, clean: finalText } = extractQuestionValue(cleanText);
+        const q = { text: finalText || cleanText, answer, type: 'vf', options: [] };
+        if (qValue !== null) q.points = qValue;
+        questions.push(q);
+      }
+      continue;
     }
 
-    // Limpiar: quitar el indicador "Verdadero / Falso" y la respuesta del enunciado
-    const text = line
-      .replace(/\s*[·\.\,]?\s*verdadero\s*[\/yo]\s*falso\b.*/i, '')
-      .replace(/\s*[·\.\,]?\s*v\.?\s*\/\s*f\.?\b.*/i, '')
-      .replace(/\s*\brespuesta\s*[:\.\-]?\s*(verdadero|falso|correcto|incorrecto|v|f)\b.*/i, '')
-      .trim();
-
-    if (text.length > 8) {
-      questions.push({ text, answer, type: 'vf', options: [] });
+    // Caso B: afirmación numerada estilo "1. Texto. V ( ) F ( )"
+    const nbm = line.match(numberedVFPat);
+    if (nbm) {
+      const text = nbm[2].replace(/[\.!]\s*$/, '').trim();
+      if (text.length > 5) {
+        questions.push({ text, answer: '', type: 'vf', options: [] });
+      }
     }
   }
   return questions;
@@ -1224,14 +1363,271 @@ function parseFallback(lines) {
   return questions;
 }
 
+// ── ESTRATEGIA 8: Columnas para relacionar / emparejar ──
+// Detecta bloques con instrucción de relacionar seguida de ítems numerados+letrados,
+// tablas de 2 columnas, pares separados por "|", tabulador o guión largo
+function parseMatchColumns(lines) {
+  const questions = [];
+
+  // Instrucción de relacionar/emparejar que introduce el bloque
+  const instrPat = /\b(relaciona|une\s+(con\s+)?flechas?|empareja|conecta|asocia|une\s+(cada|las?|los?)\s*(columna|concepto|t[eé]rmino|palabra|definici[oó]n|elemento)|une\s+cada|traza\s+(una\s+)?l[ií]nea|haz\s+corresponder|columna\s*[abABI1]+\s*(con\s*la?\s*)?columna\s*[abABI2]+|correspondencia|parejas?)\b/i;
+  // Cabeceras de columna: "Columna A", "Grupo I", "Lista 1"
+  const colHeaderPat = /^(columna\s*[abABIi]+|grupo\s*[abABIi]+|lista\s*[abABIi12]+|conjunto\s*[abABIi12]+)\s*[:\.\-]?\s*$/i;
+  // Ítem izquierdo: número, letra mayúscula o romano seguido de texto
+  const leftPat  = /^(\d{1,2}|[A-Z]{1,2}|[IVXLCDM]{1,4})[.\-\)]\s+(.{2,})/;
+  // Ítem derecho: letra minúscula, número o romano seguido de texto
+  const rightPat = /^([a-z]|[0-9]{1,2})[.\-\)]\s+(.{2,})/;
+  // Pares separados por "|" o tabulador (output de tabla de Mammoth)
+  const pipePat  = /^(.{2,})\s*\|\s*(.{2,})$/;
+  // Pares separados por tabulador
+  const tabPat   = /^(.{2,})\t(.{2,})$/;
+  // Pares "Texto — Texto" o "Texto → Texto"
+  const arrowPairPat = /^(.{3,})\s*[—–→]\s*(.{3,})$/;
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] || '';
+    if (!line || isSkipLine(line)) { i++; continue; }
+
+    // Detectar inicio de bloque: instrucción explícita o cabecera de columna
+    const hasInstr     = instrPat.test(line);
+    const hasColHeader = colHeaderPat.test(line);
+    // También detectar si hay varios pares de pipe/tab consecutivos sin instrucción
+    const hasPipePairs = pipePat.test(line) &&
+      lines.slice(i + 1, i + 4).filter(l => pipePat.test(l)).length >= 1;
+
+    if (!hasInstr && !hasColHeader && !hasPipePairs) { i++; continue; }
+
+    // ── Caso A: instrucción explícita ──
+    if (hasInstr || hasColHeader) {
+      let instrText = line;
+      i++;
+      // Continuar recopilando instrucción (múltiples líneas posibles)
+      while (i < lines.length) {
+        const l = lines[i] || '';
+        if (!l) { i++; break; }
+        if (colHeaderPat.test(l)) { i++; break; }  // llegamos a la cabecera de col
+        if (leftPat.test(l) || rightPat.test(l) || pipePat.test(l)) break;
+        if (isSkipLine(l)) { i++; continue; }
+        instrText += ' ' + l;
+        i++;
+      }
+      // Saltar cabeceras de columna
+      while (i < lines.length && colHeaderPat.test(lines[i])) i++;
+
+      const leftItems  = [];
+      const rightItems = [];
+
+      // Recoger ítems hasta encontrar nueva pregunta principal o sección
+      while (i < lines.length) {
+        const l = (lines[i] || '').trim();
+        if (!l) {
+          // Línea en blanco: si ya tenemos ítems izquierdos Y derechos, terminar el bloque
+          if (leftItems.length >= 2 && rightItems.length >= 2) { i++; break; }
+          i++; continue;
+        }
+        // Solo romper en numerado si parece una pregunta real (tiene ? o es muy larga)
+        // para no cortar una lista de 4 ítems numerados (columna izquierda del relacionar)
+        if (/^\d{1,3}[.\-\)\:]{1,2}\s/.test(l) && leftItems.length >= 2 &&
+            (l.includes('?') || l.length > 80 || /^(parte|secci[oó]n|bloque|unidad)\b/i.test(l))) break;
+        if (/^(parte|secci[oó]n|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(l)) break;
+
+        const lm  = l.match(leftPat);
+        const rm  = l.match(rightPat);
+        const pm  = l.match(pipePat);
+        const tm  = l.match(tabPat);
+        const am  = l.match(arrowPairPat);
+
+        if (pm) {
+          // Par separado por "|" — puede ser ambas columnas en una línea
+          leftItems.push({ key: String(leftItems.length + 1), text: pm[1].trim() });
+          rightItems.push({ key: String.fromCharCode(97 + rightItems.length), text: pm[2].trim() });
+        } else if (tm) {
+          leftItems.push({ key: String(leftItems.length + 1), text: tm[1].trim() });
+          rightItems.push({ key: String.fromCharCode(97 + rightItems.length), text: tm[2].trim() });
+        } else if (am && leftItems.length === 0 && rightItems.length === 0) {
+          // Primer par tipo flecha, luego probablemente haya más
+          leftItems.push({ key: String(leftItems.length + 1), text: am[1].trim() });
+          rightItems.push({ key: String.fromCharCode(97 + rightItems.length), text: am[2].trim() });
+        } else if (lm) {
+          leftItems.push({ key: lm[1], text: lm[2].trim() });
+        } else if (rm) {
+          rightItems.push({ key: rm[1], text: rm[2].trim() });
+        } else if (leftItems.length > 0 && rightItems.length === 0) {
+          // Línea sin prefijo podría ser continuación del último ítem izquierdo
+          if (leftItems.length > 0 && !isSkipLine(l) && !isQuestionLine(l)) {
+            leftItems[leftItems.length - 1].text += ' ' + l;
+          }
+        } else if (leftItems.length > 0 && rightItems.length > 0) {
+          // Probable continuación del último ítem derecho
+          if (!isSkipLine(l) && !isQuestionLine(l) && !leftPat.test(l)) {
+            rightItems[rightItems.length - 1].text += ' ' + l;
+          }
+        }
+        i++;
+      }
+
+      if (leftItems.length >= 2) {
+        const { value: qValue, clean: rawQText } = extractQuestionValue(instrText.trim());
+        // Si el texto era solo una cabecera de columna, usar texto descriptivo
+        let displayText = rawQText || instrText.trim();
+        if (/^(columna\s*[abABIi12]+|grupo\s*[abABIi12]+|lista\s*[abABIi12]+)\s*$/i.test(displayText)) {
+          displayText = 'Relaciona cada elemento de la Columna A con el correspondiente de la Columna B.';
+        }
+        const q = {
+          text: displayText,
+          answer: '',
+          type: 'match',
+          options: leftItems.map(item => ({ letter: item.key, text: item.text, correct: false })),
+          _matchRight: rightItems,
+        };
+        if (qValue !== null) q.points = qValue;
+        questions.push(q);
+      }
+      continue;
+    }
+
+    // ── Caso B: bloque de pares pipe/tab sin instrucción explícita ──
+    if (hasPipePairs) {
+      const pairItems = [];
+      while (i < lines.length) {
+        const l = (lines[i] || '').trim();
+        const pm = l.match(pipePat);
+        const tm = l.match(tabPat);
+        if (pm) {
+          pairItems.push({ left: pm[1].trim(), right: pm[2].trim() });
+          i++;
+        } else if (tm) {
+          pairItems.push({ left: tm[1].trim(), right: tm[2].trim() });
+          i++;
+        } else { break; }
+      }
+      if (pairItems.length >= 2) {
+        questions.push({
+          text: 'Relaciona cada elemento de la columna izquierda con el correcto de la derecha.',
+          answer: '',
+          type: 'match',
+          options: pairItems.map((p, idx) => ({ letter: String(idx + 1), text: p.left, correct: false })),
+          _matchRight: pairItems.map((p, idx) => ({ key: String.fromCharCode(97 + idx), text: p.right })),
+        });
+      }
+      continue;
+    }
+
+    i++;
+  }
+  return questions;
+}
+
+// ── ESTRATEGIA 9: Comprensión lectora — texto + preguntas ──
+// Detecta bloques "Lea el siguiente texto / Lee la lectura..." y extrae las preguntas que siguen
+function parseReadingComprehension(lines) {
+  const questions = [];
+  const introPat = /^(lea\s+(el\s+)?(siguiente\s+)?(texto|p[aá]rrafo|fragmento|lectura|extracto)|lee\s+(el\s+)?(siguiente\s+)?(texto|p[aá]rrafo|fragmento|lectura|extracto)|lectura\s+comprensiva?|compresi[oó]n\s+(de\s+)?lectura|lee\s+(con\s+)?(atenci[oó]n|cuidado|detenimiento)|lee\s+detenidamente|a\s+continuaci[oó]n\s+(se\s+)?presenta)\b/i;
+  // Señal de inicio de preguntas dentro del bloque de lectura
+  const questionStartPat = /^\d{1,3}[.\-\)\:]|^pregunta\s+\d|^¿|^seg[uú]n|^de\s+acuerdo|^basándose/i;
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] || '';
+    if (!line || isSkipLine(line)) { i++; continue; }
+    if (!introPat.test(line)) { i++; continue; }
+
+    // Encontrado inicio de bloque de lectura
+    let contextLines = [];
+    i++;
+
+    // Recoger texto de la lectura hasta que empiecen las preguntas numeradas
+    while (i < lines.length) {
+      const l = (lines[i] || '').trim();
+      if (questionStartPat.test(l)) break;
+      if (/^(parte|secci[oó]n|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(l)) break;
+      if (l) contextLines.push(l);
+      i++;
+    }
+
+    const context = contextLines.join(' ').substring(0, 400).trim();
+    if (!context || context.length < 20) continue;
+
+    // Recoger las preguntas que siguen al texto de lectura
+    const subLines = [];
+    while (i < lines.length) {
+      const l = lines[i] || '';
+      if (introPat.test(l)) break;
+      if (/^(parte|secci[oó]n|bloque|unidad)\s+([IVXLCDM]+|\d+)/i.test(l) && subLines.length > 2) break;
+      subLines.push(l);
+      i++;
+    }
+
+    if (subLines.length > 0) {
+      const subQs = parseStandardNumbered(subLines);
+      subQs.forEach(q => {
+        if (q.text.trim().length > 4) {
+          questions.push({ ...q, _readingContext: context });
+        }
+      });
+    }
+  }
+  return questions;
+}
+
+// ── ESTRATEGIA 10: Texto con huecos (Cloze) ──
+// Detecta párrafos con múltiples espacios en blanco (__, ..., [ ]) = preguntas de completar
+function parseClozeText(lines) {
+  const questions = [];
+  const blankPat = /_{2,}|\.{3,}|\[\s*\]|\(\s*\)/g;
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] || '';
+    if (!line || isSkipLine(line)) { i++; continue; }
+
+    // Detectar línea de instrucción de completar
+    const isCompleteInstr = /^(complet[ae]|llena|rellena|escribe\s+en\s+(el|los)\s+espacio|fill\s+in)\b/i.test(line);
+
+    if (!isCompleteInstr) { i++; continue; }
+
+    // Recoger el párrafo/texto con huecos
+    let clozeText = isCompleteInstr ? '' : line;
+    const instrText = line;
+    i++;
+
+    // Recoger líneas del texto cloze
+    while (i < lines.length) {
+      const l = (lines[i] || '').trim();
+      if (!l) { i++; break; }
+      if (/^\d{1,3}[.\-\)\:]\s/.test(l)) break; // nueva pregunta numerada
+      if (/^(parte|secci[oó]n|bloque)\s+([IVXLCDM]+|\d+)/i.test(l)) break;
+      if (isQuestionLine(l) && !blankPat.test(l)) break;
+      clozeText += ' ' + l;
+      i++;
+    }
+
+    const matches = [...(clozeText.matchAll(blankPat))];
+    if (matches.length >= 1) {
+      const { value: qValue, clean: qText } = extractQuestionValue(instrText);
+      questions.push({
+        text: (qText || instrText) + (clozeText.trim() ? ' ' + clozeText.trim() : ''),
+        answer: '',
+        type: 'fill',
+        options: [],
+        _cloze: true,
+        _blankCount: matches.length,
+      });
+      if (qValue !== null) questions[questions.length - 1].points = qValue;
+    }
+  }
+  return questions;
+}
+
 // ── HELPERS ──
 
 // ── Detectar bloques de "Instrucciones generales:" y añadir su contenido a sectionDescTexts ──
 // para que los parsers no los capten como preguntas
 function detectInstructionBlocks(lines) {
   // Captura headers solos ("Instrucciones:") e inline ("Instrucciones: Lee cada pregunta...")
-  const instrPat = /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?|aviso|recordatorio)\s*[:\.\-]?\s*(.*)/i;
-  const pondPat  = /^ponderaci[oó]n\s+(por\s+partes?|total|del\s+examen)\s*[:\.\-]?\s*$/i;
+  const instrPat = /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante|aclaratoria|al\s+estudiante)?|observaci[oó]n(\s+importante)?|aviso(\s+importante)?|recordatorio|consideraciones?\s+generales?|directrices?|lineamientos?|orientaciones?|pasos?\s+a\s+seguir|procedimiento)\s*[:\.\-]?\s*(.*)/i;
+  const pondPat  = /^(ponderaci[oó]n|distribuci[oó]n\s+de\s+puntos?|estructura\s+del\s+examen|tabla\s+de\s+ponderaci[oó]n)\s*(por\s+partes?|total|del\s+examen)?\s*[:\.\-]?\s*$/i;
 
   // Línea claramente de pregunta real: empieza con número o con pronombre interrogativo largo
   const isRealQuestion = raw =>
@@ -1244,8 +1640,10 @@ function detectInstructionBlocks(lines) {
     if (!m && !pondPat.test(line)) continue;
 
     // Si el header tiene texto inline en la misma línea, marcarlo también
-    if (m && m[7] && m[7].trim().length > 2) {
-      sectionDescTexts.add(m[7].trim());
+    // Extraer el último grupo capturado (el texto inline tras el separador)
+    const inlineText = m && m[m.length - 1];
+    if (inlineText && inlineText.trim().length > 2) {
+      sectionDescTexts.add(inlineText.trim());
     }
 
     // Recoger las líneas siguientes — límite ampliado a 20
@@ -1275,11 +1673,11 @@ function detectSections(lines) {
 
   // Patrón principal: keywords + número/romano  o  numeral romano solo
   // Ej: "Parte I (40%)", "Sección 2 – Completar – 30 puntos", "III. Desarrollo"
-  const headerPat = /^(?:(parte|sección|seccion|bloque|unidad|módulo|modulo|apartado)\s+([IVXLCDM]+|\d+|[A-F])|([IVXLCDM]{2,6})\.)\s*[:\.\-]?\s*(.*)/i;
+  const headerPat = /^(?:(parte|sección|seccion|bloque|unidad|módulo|modulo|apartado|capítulo|capitulo|tema|lección|leccion|actividad|ejercicio|reactivo)\s+([IVXLCDM]+|\d+|[A-F])|([IVXLCDM]{2,6})\.)\s*[:\.\-]?\s*(.*)/i;
 
   // Patrón alternativo: nombre de tipo solo (sin keyword/romano), CON indicador de peso
   // Ej: "OPCIÓN MÚLTIPLE (40%)", "Verdadero y Falso – 20 puntos", "Completar (10 pts)"
-  const typeOnlyPat = /^(opci[oó]n\s+m[uú]ltiple|selecci[oó]n\s+m[uú]ltiple|opci[oó]n\s+[uú]nica|verdadero\s+(y\s+)?falso|v\.?\s*[\/y]\s*f\.?|completar?|relacion[ae]r?|unir\s+(con\s+)?flechas?|correspondencia|desarrollo|c[aá]lculo|resoluci[oó]n\s+de\s+problemas?|redacci[oó]n|pregunta(s)?\s+abiert[ao]s?|respuesta\s+corta|ensayo|compresi[oó]n\s+lectora?|lectura\s+comprensiva?|ortograf[ií]a|gram[aá]tica|conjugaci[oó]n|dictado|escritura|vocabulario|definici[oó]n|ordenar|secuencia|clasificaci[oó]n)\b.*?(?:\d+\s*%|\d+\s*(?:puntos?|pts?))/i;
+  const typeOnlyPat = /^(opci[oó]n\s+m[uú]ltiple|selecci[oó]n\s+m[uú]ltiple|opci[oó]n\s+[uú]nica|respuesta\s+[uú]nica|elecci[oó]n\s+m[uú]ltiple|verdadero\s+(y\s+)?falso|cierto\s+y\s+falso|v\.?\s*[\/yo]\s*f\.?|completar?|llenar?|rellenar?|relacion[ae]r?|emparejar?|unir\s+(con\s+)?flechas?|une\s+con\s+flechas?|correspondencia|desarrollo|c[aá]lculo|resoluci[oó]n\s+de\s+problemas?|problemas?\s+matem[aá]ticos?|redacci[oó]n|composici[oó]n|pregunta(s)?\s+abiert[ao]s?|respuesta\s+corta|respuestas?\s+(corta|breve)s?|ensayo|compresi[oó]n\s+lectora?|lectura\s+comprensiva?|an[aá]lisis\s+de\s+texto|ortograf[ií]a|gram[aá]tica|conjugaci[oó]n|dictado|escritura|vocabulario|definici[oó]n|definiciones|ordenar|ordenamiento|secuencia|clasificaci[oó]n|identificaci[oó]n|se[ñn]alar|se[ñn]ala|subrayar|subraya|palabras\s+clave|conceptos?\s+clave|fill\s+in\s+(the\s+)?blank|matching|true\s+or\s+false|multiple\s+choice|short\s+answer|essay)\b.*?(?:\d+\s*%|\d+\s*(?:puntos?|pts?))/i;
 
   const pctPat = /(\d+(?:\.\d+)?)\s*%/;
   const ptsPat = /(?:valor|puntos?|pts?)\s*:?\s*(\d+)|(\d+)\s*(?:puntos?|pts?)\b/i;
@@ -1341,6 +1739,64 @@ function detectSections(lines) {
       // Extraer nombre: todo antes del paréntesis/guión de peso
       const rawName = line.replace(/\s*[\(\[–\-]\s*\d+.*$/,'').replace(/\s+/g,' ').trim();
       sections.push(extractSection(line, rawName, i));
+      continue;
+    }
+
+    // ── Rama C: título en MAYÚSCULAS CON indicador de peso ──
+    // Ej: "GRAMÁTICA (15 PTS)", "LECTURA COMPRENSIVA – 20 PUNTOS", "MATEMÁTICAS 25%"
+    const hasPts = pctPat.test(line) || ptsPat.test(line);
+    if (hasPts && !m) {
+      const textPart = line
+        .replace(/[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]/gi, '')
+        .replace(/\d+\s*(?:puntos?|pts?|%)/gi, '')
+        .replace(/[–\-–—\|]\s*$/, '')
+        .replace(/\s+/g, ' ').trim();
+      if (textPart.length >= 3 && textPart.length <= 70 &&
+          textPart === textPart.toUpperCase() &&
+          /[A-ZÁÉÍÓÚÑ]{3}/.test(textPart) &&
+          !/^(INSTRUCCIONES|INDICACIONES|NOTA|AVISO|IMPORTANTE|LEA|LEE|UTILICE)\b/i.test(textPart)) {
+        sections.push(extractSection(line, textPart, i));
+        continue;
+      }
+    }
+
+    // ── Rama D: "Ejercicio N:" o "Actividad N:" como divisor de sección ──
+    // Ej: "Ejercicio 1: Verdadero o Falso (10 puntos)"
+    // Ej: "Actividad 2 – Completar"
+    {
+      const ejPat = /^(ejercicio|actividad|secci[oó]n|bloque|unidad|tema|cap[ií]tulo|lección)\s+(\d+|[IVXLCDM]+)\s*[:\.\-–]?\s*(.*)/i;
+      const ejM = line.match(ejPat);
+      if (ejM && !m) {
+        const name = `${ejM[1]} ${ejM[2]}${ejM[3] ? ': ' + ejM[3].replace(/\s*[\(\[]\s*\d[\d\s,\.]*(?:puntos?|pts?|%)[^\)\]]*[\)\]]/gi,'').trim() : ''}`;
+        sections.push(extractSection(line, name.replace(/\s+/g,' ').trim(), i));
+        continue;
+      }
+    }
+
+    // ── Rama E: Romano solo con dos o más caracteres SIN peso — estructura sin puntuación ──
+    // Ej: "II. OPCIÓN MÚLTIPLE", "III. Desarrollo", "IV."
+    {
+      const romaNoWt = /^([IVXLCDM]{2,6})[.\-\)]\s*(.*)/;
+      const rM = line.match(romaNoWt);
+      if (rM && !m && !hasPts) {
+        const desc = (rM[2]||'').trim();
+        // Solo aceptar si el texto es corto y descriptivo (no una pregunta)
+        if (desc.length <= 60 && !isQuestionLine(line)) {
+          const name = `${rM[1]}.${desc ? ' ' + desc : ''}`;
+          sections.push({ id: sections.length + 1, name: name.replace(/\s+/g,' ').trim(), description: '', weight: 0, isPoints: false, lineIdx: i });
+          continue;
+        }
+      }
+    }
+
+    // ── Rama F: Línea corta toda en mayúsculas que parece encabezado temático ──
+    // Ej: "GRAMÁTICA", "ORTOGRAFÍA", "VOCABULARIO", "LECTURA"
+    {
+      const subjectKeywords = /^(gram[aá]tica|ortograf[ií]a|vocabulario|lectura\s+comprensiva?|compresi[oó]n\s+lectora?|redacci[oó]n|composici[oó]n|escritura|aritm[eé]tica|[aá]lgebra|geometr[ií]a|trigonom[eé]tria|fracciones|decimales|probabilidad|estad[ií]stica|historia|geograf[ií]a|ciencias?\s+naturales?|biolog[ií]a|qu[ií]mica|f[ií]sica|espa[ñn]ol|ingl[eé]s|matem[aá]ticas?|computaci[oó]n|tecnolog[ií]a|arte|m[uú]sica|educaci[oó]n\s+f[ií]sica|religi[oó]n|[eé]tica|filosof[ií]a|econom[ií]a|sociolog[ií]a|c[ií]vica|cívica|literatura|gram[aá]tica\s+y\s+ortograf[ií]a)$/i;
+      if (!m && !hasPts && subjectKeywords.test(line) && line.length <= 50) {
+        sections.push({ id: sections.length + 1, name: line.replace(/\s+/g,' ').trim(), description: '', weight: 0, isPoints: false, lineIdx: i });
+        continue;
+      }
     }
   }
 
@@ -1351,9 +1807,8 @@ function detectSections(lines) {
   {
     const dedupMap = new Map();
     for (const sec of sections) {
-      const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
-      // Solo deduplicar si se puede extraer un identificador claro (parte N, sección N...)
-      // Si no hay match, NO deduplicar (prefijo de 20 chars es demasiado impreciso)
+      const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo|ejercicio|actividad|tema|cap[ií]tulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
+      // Solo deduplicar si se puede extraer un identificador claro
       if (!km) continue;
       const normKey = km[0].toLowerCase().replace(/\s+/g,' ').trim();
       const prev = dedupMap.get(normKey);
@@ -1362,7 +1817,7 @@ function detectSections(lines) {
     // Reconstruir: mantener secciones no deduplicadas + reemplazar las deduplicadas
     if (dedupMap.size > 0) {
       const nonDup = sections.filter(sec => {
-        const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
+        const km = sec.name.toLowerCase().match(/^(parte|secci[oó]n|bloque|unidad|m[oó]dulo|ejercicio|actividad|tema|cap[ií]tulo)\s+([ivxlcdmIVXLCDM]+|\d+|[a-f])\b/i);
         return !km; // secciones sin key claro → conservar siempre
       });
       const all = [...nonDup, ...dedupMap.values()].sort((a, b) => a.lineIdx - b.lineIdx);
@@ -1397,10 +1852,15 @@ function detectSections(lines) {
       // "?" solo detiene si la línea parece una pregunta real (numerada o pronombre largo)
       if (/\?/.test(raw) && (/^\d{1,3}[.\-\)\:]/.test(raw) || /^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|quién)\s+\S{4}/i.test(raw))) break;
       if (isSkipLine(raw)) continue;   // separador, título, etc.
+      // Excepción: no añadir a sectionDescTexts líneas que sean instrucciones de relacionar/completar
+      // (serán necesarias para que parseMatchColumns y parseClozeText funcionen correctamente)
+      const isMatchOrClozeInstr = /\b(une|relaciona|empareja|conecta|asocia|completa|llena|rellena)\s+(con|cada|flechas?|los?\s+espacio)/i.test(raw);
 
       // La línea pasa todos los filtros → es una indicación de sección
       extraParts.push(raw);
-      sectionDescTexts.add(raw);       // marcar para que isSkipLine la ignore en los parsers
+      if (!isMatchOrClozeInstr) {
+        sectionDescTexts.add(raw);     // marcar para que isSkipLine la ignore en los parsers
+      }
     }
 
     if (extraParts.length > 0) {
@@ -1459,26 +1919,92 @@ function isSkipLine(l) {
       && (lClean.length < 50 || /\d+\s*%|\d+\s*(?:puntos?|pts?)/i.test(lClean)))
     || /^ejercicio\s+\d+\s*[:\.\-]?\s*$/i.test(lClean)     // "Ejercicio 1:" solo
     || /^(cuestionario|examen|evaluaci[oó]n|prueba|test|quiz)\s*\d*\s*$/i.test(lClean) // títulos
-    || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante)\s*[:\.\-]?\s*_*\s*$/i.test(lClean) // campos
+    || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante|colegio|escuela|instituci[oó]n|centro|sede|ciclo|turno|jornada|código|folio|carné|car[né])\s*[:\.\-]?\s*_*\s*$/i.test(lClean) // campos
+    // Campos con valor corto (p.ej. "Fecha: 12/04/2026", "Grado: 7mo")
+    || /^(nombre|fecha|curso|grado|grupo|a[ñn]o|materia|asignatura|profesor|docente|alumno|estudiante|colegio|escuela|instituci[oó]n|centro|sede|ciclo|turno|jornada|código|folio|carné|bimestre|trimestre|per[ií]odo|cuatrimestre|semestre)\s*[:\.\-]\s*.{1,60}$/i.test(lClean)
     || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?|aviso|recordatorio|importante)\s*[:\.\-]?\s*$/i.test(lClean)
     // Headers de instrucción con texto en la misma línea ("Instrucciones: Lee cada...")
     || /^(instrucciones(\s+generales?)?|indicaciones(\s+generales?)?|instruccion(\s+general)?|nota\s*(importante)?|observaci[oó]n(\s+importante)?)\s*[:\.\-]\s*.{5,}/i.test(lClean)
     // Frases típicas del cuerpo de instrucciones que no son preguntas
-    || /^(lea|lee|leer|revise|revisa)\s+(detenidamente|cuidadosamente|con\s+atenci[oó]n|cada\s+pregunta|cada\s+[ií]tem)/i.test(lClean)
-    || /^(cada\s+([ií]tem|pregunta|reactivo|ejercicio)|el\s+valor\s+de\s+cada|valor\s+por\s+(pregunta|[ií]tem))\s/i.test(lClean)
-    || /^(no\s+se\s+permite|no\s+se\s+admite|est[aá]\s+prohibido)\s/i.test(lClean)
-    || /^(utilice|utiliza|use\s+|us[ae]\s+)(bol[ií]grafo|lapicero|l[aá]piz|tinta)/i.test(lClean)
-    || /^(tiempo\s*(disponible|límite|m[aá]ximo)?\s*[:\.\-]|duraci[oó]n\s*[:\.\-])/i.test(lClean)
+    || /^(lea|lee|leer|revise|revisa)\s+(detenidamente|cuidadosamente|con\s+atenci[oó]n|cada\s+pregunta|cada\s+[ií]tem|las?\s+siguientes?)/i.test(lClean)
+    || /^(cada\s+([ií]tem|pregunta|reactivo|ejercicio|respuesta\s+correcta?)|el\s+valor\s+de\s+cada|valor\s+por\s+(pregunta|[ií]tem|reactivo))\s/i.test(lClean)
+    || /^(no\s+se\s+permite|no\s+se\s+admite|est[aá]\s+prohibido|no\s+est[aá]\s+permitido)\s/i.test(lClean)
+    || /^(utilice|utiliza|usa|use\s+|us[ae]\s+)(bol[ií]grafo|lapicero|l[aá]piz|tinta\s+azul|pluma)/i.test(lClean)
+    || /^(tiempo\s*(disponible|l[ií]mite|m[aá]ximo|asignado)?\s*[:\.\-]|duraci[oó]n\s*[:\.\-])/i.test(lClean)
     || /^la\s+(prueba|evaluaci[oó]n|examen)\s+(tiene|consta|vale|tiene\s+un\s+valor)/i.test(lClean)
-    || /^(valor|puntaje|punteo)\s*[:\.\-]\s*\d+/i.test(lClean)
-    || /^p[aá]gina\s+\d+/i.test(lClean)                    // números de página
+    || /^esta\s+(evaluaci[oó]n|prueba|examen)\s+(consta|tiene|vale|abarca)/i.test(lClean)
+    || /^(valor|puntaje|punteo|total\s+de\s+puntos?)\s*[:\.\-]\s*\d+/i.test(lClean)
+    // Pie de página / encabezado de hoja
+    || /^p[aá]gina\s+\d+/i.test(lClean)
     || /^\d+\s*\/\s*\d+$/.test(lClean)                     // "1/10" paginación
     || /^p[aá]g\.?\s*\d+\s*(de\s*\d+)?$/i.test(lClean)    // "pág. 1 de 10"
+    || /^hoja\s+\d+\s*(de\s*\d+)?$/i.test(lClean)         // "hoja 1 de 3"
     || /^\[\s*\d+\s*\]$/.test(lClean)                      // "[1]" footnote/página
-    || /^(total|puntaje|puntos|calificaci[oó]n|nota)\s*[:\.\-]?\s*\d*\s*$/i.test(lClean); // totales
+    || /^(total|puntaje|puntos|calificaci[oó]n|nota|puntuaci[oó]n)\s*[:\.\-]?\s*\d*\s*$/i.test(lClean) // totales
+    // Continuación de hoja
+    || /^(contin[uú][ae]|ver\s+(al\s+)?reverso|voltea(r)?\s+(la\s+)?hoja|sigue\s+en|siguiente\s+p[aá]gina)/i.test(lClean)
+    // Firma y sello
+    || /^(firma\s*(del\s+)?(docente|profesor|maestro|evaluador)?|sello\s+(de\s+la\s+)?(instituci[oó]n|escuela)?|revisado\s+por|aprobado\s+por|visto\s+bueno)\s*[:\.\-]?\s*_*\s*$/i.test(lClean)
+    // Escala de calificación
+    || /^(escala\s+de\s+(calificaci[oó]n|notas?|puntaje)|tabla\s+de\s+(ponderaci[oó]n|calificaci[oó]n))\b/i.test(lClean)
+    // Tabla de ponderación (resumen inicial del examen)
+    || /^(ponderaci[oó]n|distribuci[oó]n\s+de\s+puntos?|estructura\s+del\s+examen)\b/i.test(lClean)
+    // Encabezado de clave de respuestas al final del examen
+    || /^(clave\s+(de\s+)?(respuestas?|answers?)?|respuestas?\s+correctas?|answer\s+key|soluciones?|solucionario|clave\s+de\s+evaluaci[oó]n|respuestas?\s+del\s+examen)\s*[:\.\-]?\s*$/i.test(lClean)
+    // Líneas de clave: "1. A  2. B  3. C" (≥3 pares número-letra consecutivos)
+    || (/^(\d{1,3}\s*[.\-\)\:]\s*[A-Fa-fVvFf]\s*[,;]?\s*){3,}$/.test(lClean.replace(/\s+/g,' ')));
 }
 
 function isEjercicio(l) { return /^ejercicio\s+\d+/i.test(l); }
+
+// ── Extrae indicador de valor/puntos embebido en una línea de pregunta ──
+// Soporta: "(2 pts)", "[3 puntos]", "Valor: 2", "(val: 1.5)", "___/10", "(1.0)"
+// Retorna { value: number|null, clean: string (línea sin el marcador de valor) }
+function extractQuestionValue(line) {
+  let value = null;
+  let clean = line || '';
+
+  const tests = [
+    // "(valor: 2)" o "(val: 3)" — con la palabra valor/val pero sin "pts"
+    /[\(\[]\s*(?:valor|val\.?)\s*:?\s*(\d+(?:[.,]\d+)?)\s*[\)\]]/i,
+    // "(2 pts)", "(2 puntos)", "(2p)", "[1 pto]", "(2.0 pts)"
+    /[\(\[]\s*(\d+(?:[.,]\d+)?)\s*(?:puntos?|p\.?|pts?|pto\.?)\s*[\)\]]/i,
+    // "Valor: 2" / "valor: 2.5 pts" / "val: 1" sin paréntesis — al inicio o tras espacio
+    /(?:^|\s)valor\s*:?\s*(\d+(?:[.,]\d+)?)\s*(?:puntos?|pts?|p\.?)?(?:\s|$)/i,
+    // "puntaje: 3" / "punteo: 2" / "pts: 3"
+    /(?:^|\s)(?:puntaje|punteo|pts)\s*:?\s*(\d+(?:[.,]\d+)?)\s*(?:puntos?)?(?:\s|$)/i,
+    // "___/5" o "/10" solo al final de línea con texto previo
+    /(?<=.{8})_{0,4}\s*\/\s*(\d+)\s*$/,
+  ];
+
+  for (const re of tests) {
+    try {
+      const m = clean.match(re);
+      if (m && m[1]) {
+        const v = parseFloat(m[1].replace(',', '.'));
+        if (v > 0 && v <= 50) {
+          value = v;
+          clean = clean.replace(m[0], '').replace(/\s+/g, ' ').trim();
+          break;
+        }
+      }
+    } catch(e) { /* lookbehind no soportado en este navegador */ }
+  }
+
+  // "(1.5)" o "(2)" solos al final de una línea con texto sustancial
+  if (value === null && clean.length > 12) {
+    const m = clean.match(/\(\s*(\d+(?:[.,]\d+)?)\s*\)\s*$/);
+    if (m) {
+      const v = parseFloat(m[1].replace(',', '.'));
+      if (v > 0 && v <= 50) {
+        value = v;
+        clean = clean.slice(0, clean.lastIndexOf(m[0])).replace(/\s+/g, ' ').trim();
+      }
+    }
+  }
+
+  return { value, clean };
+}
 
 // ── Función global: determina si una línea es una pregunta ──
 function isQuestionLine(l) {
@@ -1495,10 +2021,10 @@ function isQuestionLine(l) {
   if (/^(qué|cuál|cuáles|cómo|dónde|cuándo|cuánto|cuántos|cuántas|cuánta|quién|quiénes|por\s*qué|para\s*qué|de\s*qué|a\s*qué|con\s*qué|what|which|how|where|when|who|why|whose)/i.test(t)) return true;
 
   // Verbos imperativos que inician consignas — español (tú/vos/usted) e inglés
-  if (/^(escrib[eaií]|completa|complet[ae]|identifica|identifiqu[eé]|menciona|mension[ae]|indic[aáeé]|señal[aáeé]|ordan[aá]|orden[ae]|clasific[aá]|relaciona|relacion[ae]|defin[eií]|defin[ae]|explic[aáeé]|describ[eií]|describ[ae]|resuelv[ae]|resolv[eé]|calcula|calcul[ae]|determin[aáeé]|encuentr[ae]|encontrá|selecci[oó]n[ae]|elij[ae]|elig[eí]|marc[aáeé]|subray[aáeé]|un[eí]|un[ae]|le[eé]|nombr[ae]|analiz[aáeé]|compar[ae]|diferenci[ae]|enumer[ae]|justific[aáeé]|argument[ae]|demostr[áeé]|traduc[eí]|conjug[ae]|redact[ae]|elabor[ae]|investig[ae]|observ[ae]|dibuj[ae]|grafic[ae]|traz[ae]|mid[eí]|interpret[ae]|evalúa|evalú[ae]|sintetiz[ae]|resumí|resum[ae]|infier[ae]|deduc[eé]|comenta|coment[ae]|opina|opin[ae]|propon[eé]|sugier[ae]|verifica|verific[ae]|escog[eé]|seleccion[áa]|circula|circulá|subraya|subrayá|tacha|tachá|anota|anotá|copiaí|registr[ae]|aplic[ae]|us[ae]|escucha|recit[ae]|conjugá|clasific[ae]|agrupa|agrupá|recorta|recortá|peg[ae]|formul[ae]|plant[ae]|propon[eé]|write|read|find|choose|select|match|circle|underline|fill|complete|answer|solve|calculate|identify|describe|explain|list|name|give|state|determine|analyze|compare|define|translate|conjugate|order|sort|connect|draw|label)/i.test(t)) return true;
+  if (/^(escrib[eaií]|completa|complet[ae]|identifica|identifiqu[eé]|menciona|mension[ae]|indic[aáeé]|señal[aáeé]|ordan[aá]|orden[ae]|clasific[aá]|relaciona|relacion[ae]|defin[eií]|defin[ae]|explic[aáeé]|describ[eií]|describ[ae]|resuelv[ae]|resolv[eé]|calcula|calcul[ae]|determin[aáeé]|encuentr[ae]|encontrá|selecci[oó]n[ae]|elij[ae]|elig[eí]|marc[aáeé]|subray[aáeé]|un[eí]|un[ae]|le[eé]|nombr[ae]|analiz[aáeé]|compar[ae]|diferenci[ae]|enumer[ae]|justific[aáeé]|argument[ae]|demostr[áeé]|traduc[eí]|conjug[ae]|redact[ae]|elabor[ae]|investig[ae]|observ[ae]|dibuj[ae]|grafic[ae]|traz[ae]|mid[eí]|interpret[ae]|evalúa|evalú[ae]|sintetiz[ae]|resumí|resum[ae]|infier[ae]|deduc[eé]|comenta|coment[ae]|opina|opin[ae]|propon[eé]|sugier[ae]|verifica|verific[ae]|escog[eé]|seleccion[áa]|circula|circulá|subraya|subrayá|tacha|tachá|anota|anotá|copi[ae]|registr[ae]|aplic[ae]|us[ae]|escucha|recit[ae]|conjugá|clasific[ae]|agrupa|agrupá|recorta|recortá|peg[ae]|formul[ae]|plant[ae]|propon[eé]|presenta|present[ae]|conviert[ae]|transform[ae]|desarrolla|desarroll[ae]|explor[ae]|invest[ií]ga|reflexion[ae]|cr[eé]a|crea|diseña|construy[ae]|calificá|evaluá|escoger|escoger|mark|write|read|find|choose|select|match|circle|underline|fill|complete|answer|solve|calculate|identify|describe|explain|list|name|give|state|determine|analyze|compare|define|translate|conjugate|order|sort|connect|draw|label|indicate|mention|show|prove|demonstrate|evaluate|classify|summarize|highlight|cross\s+out|cross\s+off|put\s+in\s+order|number|rank)/i.test(t)) return true;
 
   // Frases de contexto que introducen preguntas
-  if (/^(según|de acuerdo (a|con)|con base (en)?|basándose (en)?|a partir de|en relación (a|con)|respecto (a)?|acerca de|sobre la base|considerando (que)?|teniendo en cuenta|dado (que)?|dada (la|una)?|si\s+.{3,}\s*,?\s*(entonces|qué|cuál|cómo)|de las? siguientes?|cuál(es)? de las? siguientes?|escog[eé] la? (opción|respuesta)|elige? la? (opción|respuesta)|indica (cuál|qué|cómo)|¿)/i.test(t)) return true;
+  if (/^(según|de acuerdo (a|con)|con base (en)?|basándose (en)?|a partir de|en relación (a|con)|respecto (a)?|acerca de|sobre la base|considerando (que)?|teniendo en cuenta|dado (que)?|dada (la|una)?|si\s+.{3,}\s*,?\s*(entonces|qué|cuál|cómo)|de las? siguientes?|cuál(es)? de las? siguientes?|escog[eé] la? (opción|respuesta)|elige? la? (opción|respuesta)|indica (cuál|qué|cómo)|¿|en el (texto|p[aá]rrafo|fragmento)|con (base|referencia) (en|a)|lee (el|la) siguiente|observa (el|la|los|las)|en la (imagen|figura|gr[aá]fico|tabla|ilustraci[oó]n)|seg[uú]n (el|la) (texto|lectura|p[aá]rrafo|autor)|a\s+(partir\s+de|trav[eé]s\s+de)\s+(la|el|lo)|completa\s+(el|la|los|las|este|esta)|di\s+(si|cuál|qué|cómo)|elige?\s+(la|el)\s+(opci[oó]n|respuesta|valor|resultado|concepto|t[eé]rmino)|escog[eé]\s+(la|el)\s+(opci[oó]n|respuesta)|indica\s+(si|cuál|qué|cómo|cuándo|cuánto|dónde|quién)|entre\s+las?\s+siguientes?\s+opciones?|cu[aá]l\s+de\s+las?\s+siguientes?|cuales\s+de\s+las?\s+siguientes?)/i.test(t)) return true;
 
   // Empieza con número seguido de patrón de pregunta (ya manejado por estrategia 3, pero útil aquí)
   // No incluimos esto para no duplicar con la estrategia 3
@@ -1515,7 +2041,9 @@ function preprocessLines(lines) {
   const isBreakLine = l =>
     /^[\(\[]?([a-fA-F]|[ivxIVX]{1,4})[\)\.\-\]]/.test(l) ||    // opción a) b) c)
     /^(\d{1,3})[.\-\)\:]{1,2}\s/.test(l) ||                     // número de pregunta
-    /^(r|respuesta|resp|rta|solución|solucion|consigna|ejercicio|pregunta)\s*[:\.\-]/i.test(l) ||
+    /^(r|respuesta|resp|rta|solución|solucion|consigna|ejercicio|pregunta|clave|answer|key)\s*[:\.\-]/i.test(l) ||
+    /^(columna|grupo|lista|conjunto)\s*[abABIi12]+\s*[:\.\-]?\s*$/i.test(l) || // cabecera de columna match
+    /^\d{1,2}\.\s+[A-ZÁÉÍÓÚÑ]/.test(l) ||                       // ítem numerado con mayúscula
     isSkipLine(l) ||
     isQuestionLine(l);                                            // nueva pregunta
 
@@ -1592,22 +2120,22 @@ function detectType(text, hasOptions = false) {
   const t = text.toLowerCase();
 
   // V/F: detectar múltiples formatos
-  if (/verdadero\s*(o|\/|\|)?\s*falso|falso\s*(o|\/|\|)?\s*verdadero|v\s*\/\s*f|f\s*\/\s*v|true\s*(or|\/|\|)?\s*false|\(\s*\)\s*v\s+\(\s*\)\s*f|\[\s*\]\s*v\s+\[\s*\]\s*f|cierto\s*(o|\/|\|)?\s*falso|correcto\s*(o|\/|\|)?\s*incorrecto|indica\s+si\s+(es\s+)?(verdadero|cierto|correcto)|marca\s+(v|verdadero)\s+o\s+(f|falso)|di\s+si\s+(es\s+)?(verdad|mentira|cierto|falso)|escribe\s+v\s+o\s+f|circula\s+(v|f)|anota\s+v\s+o\s+f|marca\s+con\s+(v|f)|determina\s+si\s+(es\s+)?(verdadero|falso|cierto)|señala\s+si\s+(es\s+)?(verdadero|falso)|¿?(es\s+)?(verdadero|falso)\s+que/i.test(t)) return 'vf';
+  if (/verdadero\s*(o|\/|\|)?\s*falso|falso\s*(o|\/|\|)?\s*verdadero|v\s*\/\s*f|f\s*\/\s*v|true\s*(or|\/|\|)?\s*false|\(\s*\)\s*v\s+\(\s*\)\s*f|\[\s*\]\s*v\s+\[\s*\]\s*f|cierto\s*(o|\/|\|)?\s*falso|correcto\s*(o|\/|\|)?\s*incorrecto|indica\s+si\s+(es\s+)?(verdadero|cierto|correcto)|marca\s+(v|verdadero)\s+o\s+(f|falso)|di\s+si\s+(es\s+)?(verdad|mentira|cierto|falso)|escribe\s+v\s+o\s+f|circula\s+(v|f)|anota\s+v\s+o\s+f|marca\s+con\s+(v|f)|determina\s+si\s+(es\s+)?(verdadero|falso|cierto)|señala\s+si\s+(es\s+)?(verdadero|falso)|¿?(es\s+)?(verdadero|falso)\s+que|correct\s+or\s+incorrect|true\s+or\s+false|verdad\s+o\s+mentira|cierto\s+o\s+incorrecto/i.test(t)) return 'vf';
 
   // Si tiene opciones definidas → multiple
   if (hasOptions) return 'multiple';
 
   // Relacionar/Match: detectar preguntas de emparejar columnas
-  if (/relaciona|relacione|relacioná|une\s+(con|cada)|empareja|empareje|emparejá|conecta|conecte|conectá|asocia|asocie|asociá|match|matching|columna\s*a.*columna\s*b|une\s+las?\s+columnas?|traza\s+(una\s+)?l[ií]nea|parejas?|escoge\s+la\s+definici[oó]n|une\s+(cada\s+)?(concepto|t[eé]rmino|palabra)|une\s+(con\s+)?flechas?|conecta\s+(con\s+)?flechas?/i.test(t)) return 'match';
+  if (/relaciona|relacione|relacioná|une\s+(con|cada)|empareja|empareje|emparejá|conecta|conecte|conectá|asocia|asocie|asociá|match|matching|columna\s*[abABI12]|une\s+las?\s+columnas?|traza\s+(una\s+)?l[ií]nea|parejas?|escoge\s+la\s+definici[oó]n|une\s+(cada\s+)?(concepto|t[eé]rmino|palabra)|une\s+(con\s+)?flechas?|conecta\s+(con\s+)?flechas?|hace(r)?\s+corresponder|escribe\s+(la\s+)?letra|escribe\s+el\s+(número|n[uú]mero)|une\s+el\s+(concepto|t[eé]rmino)\s+con|correspond[ae]\s+a|correspondencia\s+entre/i.test(t)) return 'match';
 
   // Ordenar: detectar preguntas de secuencia
-  if (/ordena|ordene|ordená|orden(a|e)?\s+(cronol[oó]gic|l[oó]gic|alfab[eé]tic|secuenc)|pon\s+en\s+orden|organiza|organice|organizá|secuencia|enumera\s+(en\s+)?orden|arrange|put\s+in\s+order|sequence|del\s+primero\s+al|de\s+mayor\s+a\s+menor|de\s+menor\s+a\s+mayor|paso\s+a\s+paso|en\s+forma\s+(cronol[oó]gica|secuencial)|numeralos|num[eé]ralas/i.test(t)) return 'order';
+  if (/ordena|ordene|ordená|orden(a|e)?\s+(cronol[oó]gic|l[oó]gic|alfab[eé]tic|secuenc|los|las|del|de\s+mayor)|pon\s+en\s+orden|organiza|organice|organizá|secuencia|enumera\s+(en\s+)?orden|arrange|put\s+in\s+order|sequence|del\s+primero\s+al|de\s+mayor\s+a\s+menor|de\s+menor\s+a\s+mayor|paso\s+a\s+paso|en\s+forma\s+(cronol[oó]gica|secuencial)|num[eé]ra(los|las)|numera|clasifica\s+de|ordena\s+de|jerarquiza|jerarquiz[ae]|rang[oa]|coloca\s+en\s+orden|escr[ií]belos\s+en\s+orden/i.test(t)) return 'order';
 
   // Fill: detectar espacios en blanco de múltiples formas
-  if (/_{2,}|\.{3,}|\[\s*\]|\(\s*\)|\(blank\)|\(espacio\)|<blank>|<espacio>|completa\s+(la|el|los|las|con)|complete|completá|llena\s+(el|los|la|las)|llene|llená|rellena|rellene|rellaná|escribe\s+(en\s+)?(el|los|la|las)?\s*(espacio|blank|hueco)|fill\s+in|palabra\s+faltante|espacio\s+en\s+blanco|t[eé]rmino\s+correcto|t[eé]rmino\s+faltante|palabra\s+correcta|completa\s+el\s+espacio|escribe\s+la\s+palabra|escribe\s+el\s+t[eé]rmino/i.test(t)) return 'fill';
+  if (/_{2,}|\.{3,}|\[\s*\]|\(\s*\)|\(blank\)|\(espacio\)|<blank>|<espacio>|completa\s+(la|el|los|las|con|el\s+siguiente)|complete|completá|llena\s+(el|los|la|las)\s*(espacio|cuadro|hueco|blank)?|llene|llená|rellena|rellene|rellaná|escribe\s+(en\s+)?(el|los|la|las)?\s*(espacio|blank|hueco|l[ií]nea)|fill\s+in|palabra\s+faltante|espacio\s+en\s+blanco|t[eé]rmino\s+(correcto|faltante|apropiado)|palabra\s+(correcta|faltante|adecuada|apropiada)|completa\s+el\s+(espacio|cuadro|siguiente)|escribe\s+la\s+palabra|escribe\s+el\s+t[eé]rmino|escribe\s+en\s+el\s+(espacio|l[ií]nea)|anota\s+(en\s+)?(el\s+)?(espacio|l[ií]nea|blank)|apunta\s+la\s+palabra/i.test(t)) return 'fill';
 
   // Cálculo/numérico: detectar preguntas matemáticas
-  if (/calcula|calcule|calculá|resuelve|resuelva|resolvé|halla|halle|hallá|encuentra\s+(el|la)\s*(valor|resultado|suma|resta|producto|cociente|[aá]rea|per[ií]metro|volumen)|solve|compute|find\s+the\s+(value|result|sum|difference|product|area|perimeter)|operaci[oó]n|ecuaci[oó]n|resultado\s+de|cu[aá]nto\s+(es|son|vale|mide|pesa)|cu[aá]ntos?\s+(son|hay|tiene)|determina\s+(el|la)\s*(valor|[aá]rea|volumen|per[ií]metro)/i.test(t)) return 'numeric';
+  if (/calcula|calcule|calculá|resuelve|resuelva|resolvé|halla|halle|hallá|encuentra\s+(el|la)\s*(valor|resultado|suma|resta|producto|cociente|[aá]rea|per[ií]metro|volumen|n[uú]mero)|solve|compute|find\s+the\s+(value|result|sum|difference|product|area|perimeter)|operaci[oó]n|ecuaci[oó]n|resultado\s+de|cu[aá]nto\s+(es|son|vale|mide|pesa|cuesta)|cu[aá]ntos?\s+(son|hay|tiene|quedan|faltan|sobran)|determina\s+(el|la)\s*(valor|[aá]rea|volumen|per[ií]metro|suma|resta|producto)|probl[ée]m[ao]|ejercicio\s+matem[aá]tico|simplifica|factoriza|deriva|integra|convert(ir|í)?\s+(a|en)|expresa\s+en|escribe\s+(en\s+)?(n[uú]mero|notaci[oó]n|forma)\s+(decimal|fraccionaria|porcentual|cient[ií]fica)/i.test(t)) return 'numeric';
 
   return 'open';
 }
@@ -1644,12 +2172,12 @@ function autoSplitQA(questions) {
     m = t.match(/^(.{8,}?\?)\s*=\s*(.{2,})$/);
     if (m) return [m[1].trim(), m[2].trim()];
 
-    // P4: etiqueta "R:", "Resp:", "Rta:", "Respuesta:" inline
-    m = t.match(/^(.{8,}?)\s+[Rr](?:esp(?:uesta)?|ta)?[:\-]\s*(.{3,})$/);
-    if (m && !/^(respuesta|resp|rta|r)$/i.test(m[1].trim())) return [m[1].trim(), m[2].trim()];
+    // P4: etiqueta "R:", "Resp:", "Rta:", "Respuesta:", "Clave:", "Key:", "Ans:" inline
+    m = t.match(/^(.{8,}?)\s+(?:[Rr](?:esp(?:uesta)?|ta)?|[Cc]lave|[Kk]ey|[Aa]ns(?:wer)?|[Ss]ol(?:uci[oó]n)?)[:\-]\s*(.{3,})$/);
+    if (m && !/^(respuesta|resp|rta|r|clave|key|ans|answer)$/i.test(m[1].trim())) return [m[1].trim(), m[2].trim()];
 
-    // P5: etiqueta "Respuesta:", "Resp:", "Solución:" como segunda oración
-    m = t.match(/^(.{8,}?[.?!])\s+(?:Respuesta|Resp|Rta|Solución|Solucion|Answer)\s*:\s*(.{2,})$/i);
+    // P5: etiqueta "Respuesta:", "Resp:", "Solución:", "Clave:", "Key:" como segunda oración
+    m = t.match(/^(.{8,}?[.?!])\s+(?:Respuesta|Resp|Rta|Solución|Solucion|Clave|Key|Answer|Ans)\s*:\s*(.{2,})$/i);
     if (m) return [m[1].trim(), m[2].trim()];
 
     // P6: "La respuesta es: X" o "La respuesta correcta es X"
@@ -1692,6 +2220,73 @@ function autoSplitQA(questions) {
     if (split) return { ...q, text: split[0], answer: split[1], _autoSplit: true };
     return q;
   });
+}
+
+// ── Detecta clave de respuestas al final del documento ──
+// Soporta: "1. A  2. B  3. C" / "1-A, 2-B" / "1. Verdadero" / bloque "Clave de respuestas:"
+// Retorna mapa { numero: respuesta }
+function detectAnswerKey(lines) {
+  const keyMap = {};
+
+  // Cabecera de clave de respuestas
+  const keyHeaderPat = /^(clave\s+(de\s+)?(respuestas?|answers?)?|respuestas?\s+correctas?|answer\s+key|soluciones?|solucionario|clave\s+de\s+evaluaci[oó]n|respuestas?\s+del\s+examen)\s*[:\.\-]?\s*$/i;
+
+  // Par "N. X" o "N) X" o "N: X" o "N-X"
+  const pairPat = /^(\d{1,3})\s*[.\-\)\:]\s*([A-Fa-f]|verdadero|falso|cierto|incorrecto|true|false|\d+(?:[.,]\d+)?)\s*(?:[,;]|$)/gi;
+
+  // Fila completa de respuestas en una línea: "1. A  2. B  3. C  4. D"
+  const rowPat = /(\d{1,3})\s*[.\-\)\:]?\s*([A-Fa-f]|V|F)\s*/gi;
+
+  let inKeySection = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] || '').trim();
+    if (!line) continue;
+
+    if (keyHeaderPat.test(line)) {
+      inKeySection = true;
+      continue;
+    }
+
+    if (inKeySection) {
+      // Intentar extraer pares de esta línea
+      pairPat.lastIndex = 0;
+      let m;
+      let found = false;
+      while ((m = pairPat.exec(line)) !== null) {
+        const n = parseInt(m[1]);
+        if (n >= 1 && n <= 200) {
+          keyMap[n] = m[2].trim();
+          found = true;
+        }
+      }
+
+      if (!found) {
+        // Intentar formato de fila compacta: "1A 2B 3C" o "1.A 2.B 3.C"
+        const compact = line.match(/(\d{1,3})\s*[.\-]?\s*([A-Fa-f])/g);
+        if (compact && compact.length >= 3) {
+          compact.forEach(pair => {
+            const pm = pair.match(/(\d{1,3})\s*[.\-]?\s*([A-Fa-f])/);
+            if (pm) keyMap[parseInt(pm[1])] = pm[2].toUpperCase();
+          });
+        }
+        // Detener si la línea es muy larga y no tiene pares (inicio de nuevo contenido)
+        if (!compact && line.length > 120) inKeySection = false;
+      }
+    } else {
+      // Fuera de bloque: buscar fila compacta de tipo "1. A  2. B  3. C" con ≥4 pares
+      rowPat.lastIndex = 0;
+      const rowMatches = [...line.matchAll(/(\d{1,3})\s*[.\-\)\:]?\s*([A-Fa-f])\b/g)];
+      if (rowMatches.length >= 4) {
+        rowMatches.forEach(rm => {
+          const n = parseInt(rm[1]);
+          if (n >= 1 && n <= 200) keyMap[n] = rm[2].toUpperCase();
+        });
+      }
+    }
+  }
+
+  return keyMap;
 }
 
 // ── Determina el formato de respuesta esperada ──
