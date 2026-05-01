@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Centro Escolar INSA — Evaluación</title>
+<title>GestINSA — Examen Alumno</title>
 
 <!-- PWA Meta Tags -->
 <meta name="description" content="Sistema de evaluación digital para exámenes - INSA">
@@ -21,28 +21,32 @@
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #f3f6fc; 
-  --surface: rgba(255, 255, 255, 0.85);
-  --surface2: rgba(255, 255, 255, 0.95);
+  --bg: #f1f5f9;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface2: #ffffff;
   --surface-solid: #ffffff;
-  --border: rgba(226, 232, 240, 0.8);
+  --border: #e2e8f0;
   --text: #1e293b;
   --text2: #64748b;
   --accent: #2563eb;
-  --accent-light: #eff6ff;
+  --accent-light: #dbeafe;
   --accent-dark: #1d4ed8;
-  --success: #10b981;
-  --danger: #ef4444;
-  --warn: #f59e0b;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warn: #d97706;
   --slate: #0f172a;
-  --glass-shadow: 0 8px 32px rgba(15, 23, 42, 0.04);
-  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  --glass-shadow: 0 4px 6px -1px rgba(0,0,0,.1);
+  --card-shadow: 0 1px 3px rgba(0,0,0,.08);
+  /* Aliases GestINSA */
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-light: #dbeafe;
 }
 
 /* Base Restyle */
 * { box-sizing: border-box; margin:0; padding:0; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 input, textarea { -webkit-user-select:text; user-select:text; }
-body { overscroll-behavior:none; touch-action:pan-y; font-family:'Outfit', sans-serif; background:var(--bg); background-image: radial-gradient(at 0% 0%, hsla(210,100%,97%,1) 0, transparent 50%), radial-gradient(at 100% 100%, hsla(220,100%,96%,1) 0, transparent 50%); background-attachment: fixed; color:var(--text); min-height:100vh; font-size:15px; }
+body { overscroll-behavior:none; touch-action:pan-y; font-family:'Outfit', sans-serif; background:var(--bg); color:var(--text); min-height:100vh; font-size:15px; }
 html.exam-mode { overflow:hidden; height:100%; }
 body.exam-active { position:fixed; width:100%; height:100%; overflow-y:scroll; -webkit-overflow-scrolling:auto; }
 
@@ -57,13 +61,13 @@ body.exam-active { position:fixed; width:100%; height:100%; overflow-y:scroll; -
 .blocked-overlay button { padding:.8rem 2rem; background:#ef4444; color:#fff; border:none; border-radius:12px; font-size:1rem; font-weight:700; cursor:pointer; font-family:'Outfit',sans-serif; box-shadow:0 10px 25px -5px rgba(239,68,68,0.4); transition:all .2s; }
 .blocked-overlay button:hover { background:#dc2626; transform:translateY(-2px); }
 
-/* Header */
-.hdr { background:rgba(255,255,255,0.7); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border-bottom:1px solid rgba(255,255,255,0.5); padding:.8rem 1.5rem; display:flex; align-items:center; gap:.5rem; position:sticky; top:0; z-index:100; box-shadow:var(--glass-shadow); }
+/* Header — alineado con GestINSA */
+.hdr { background:#2563eb; border-bottom:1px solid rgba(255,255,255,.15); padding:.75rem 1.5rem; display:flex; align-items:center; gap:.5rem; position:sticky; top:0; z-index:100; box-shadow:0 2px 8px rgba(37,99,235,.35); }
 .hdr-logo-img { width:42px; height:42px; border-radius:12px; background:var(--surface-solid); box-shadow:0 4px 12px rgba(0,0,0,.08); object-fit:cover; margin-right:.8rem; border:1px solid #e2e8f0; }
 .hdr-text { flex:1; }
-.hdr-title { font-size:1.05rem; font-weight:700; color:var(--slate); letter-spacing:-.01em; }
-.hdr-sub { font-size:.75rem; color:var(--text2); font-family:'Inter',sans-serif; }
-.hdr-timer { background:var(--surface-solid); border:1px solid var(--border); border-radius:10px; padding:.4rem 1rem; font-size:.9rem; font-family:'Inter',monospace; font-weight:600; color:var(--slate); box-shadow:0 2px 8px rgba(0,0,0,.04); display:flex; align-items:center; gap:.6rem; transition:all .3s;}
+.hdr-title { font-size:1.05rem; font-weight:700; color:#fff; letter-spacing:-.01em; }
+.hdr-sub { font-size:.75rem; color:rgba(255,255,255,.75); font-family:'Inter',sans-serif; }
+.hdr-timer { background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.25); border-radius:10px; padding:.4rem 1rem; font-size:.9rem; font-family:'Inter',monospace; font-weight:600; color:#fff; display:flex; align-items:center; gap:.6rem; transition:all .3s;}
 .hdr-timer::before { content:''; display:block; width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 8px var(--success); }
 .hdr-timer.warning::before { background:var(--warn); box-shadow:0 0 8px var(--warn); }
 .hdr-timer.warning { border-color:#fef08a; background:#fefce8; }
@@ -273,13 +277,28 @@ body.exam-active .main { padding-bottom:5rem; }
 </div>
 
 <div class="hdr">
-  <img class="hdr-logo-img" id="logoImg" src="" alt="INSA">
-  <div class="hdr-text">
-    <div class="hdr-title">Centro Escolar INSA</div>
-    <div class="hdr-sub">Santa Ana, El Salvador — Evaluación Digital</div>
+  <div style="display:flex;align-items:center;gap:.6rem;flex:1;min-width:0">
+    <a href="../index.html" id="hdr-back-btn"
+      style="background:rgba(37,99,235,.1);border:1px solid rgba(37,99,235,.25);color:#1d4ed8;
+             padding:.28rem .65rem;border-radius:20px;font-size:.72rem;cursor:pointer;
+             font-family:'Outfit',sans-serif;display:flex;align-items:center;gap:.3rem;
+             text-decoration:none;white-space:nowrap;transition:background .15s;flex-shrink:0"
+      title="Volver a GestINSA">← GestINSA</a>
+    <div class="hdr-text">
+      <div class="hdr-title">GestINSA — Evaluación Digital</div>
+      <div class="hdr-sub">Examen seguro con detección anti-trampa</div>
+    </div>
   </div>
-  <div class="hdr-timer" id="timer">
-    <span id="timerIcon">--:--</span>
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <a href="examen-docente.html" id="hdr-crear-btn"
+      style="background:rgba(37,99,235,.1);border:1px solid rgba(37,99,235,.25);color:#1d4ed8;
+             padding:.28rem .65rem;border-radius:20px;font-size:.72rem;
+             font-family:'Outfit',sans-serif;display:flex;align-items:center;gap:.3rem;
+             text-decoration:none;white-space:nowrap;transition:background .15s"
+      title="Crear examen (docente)">📝 Crear Examen</a>
+    <div class="hdr-timer" id="timer">
+      <span id="timerIcon">--:--</span>
+    </div>
   </div>
 </div>
 
@@ -300,8 +319,13 @@ body.exam-active .main { padding-bottom:5rem; }
   <div style="color:#fff;margin-top:1.2rem;font-size:.85rem;letter-spacing:.08em;text-transform:uppercase">Evaluando respuestas...</div>
 </div>
 
-<script src="wordnet-es.js"></script>
+<!-- Firebase de GestINSA -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
+'use strict';
+// wordnet-es.js no se carga externamente: el diccionario SINONIMOS está embebido en este archivo.
+
 // ═══════════════════════════════════════
 // CONFIGURACION ANTI-TRAMPA
 // ═══════════════════════════════════════
@@ -1163,7 +1187,7 @@ function suspendExam(reason) {
   render();
   toast('EXAMEN SUSPENDIDO: ' + reason, 'error');
   // Subir resultado suspendido a la nube automáticamente
-  setTimeout(() => uploadResultsToCloud(), 600);
+  setTimeout(() => subirResultadoFirestore(), 600);
 }
 
 async function attemptUnlock() {
@@ -1188,7 +1212,14 @@ async function attemptUnlock() {
   const salt = examData.meta.name + '_examdoc_v2';
   const hash = await hashPassword(pw, salt);
 
-  if (hash === pwHash) {
+  let _pwOk = (hash === pwHash);
+  if (!_pwOk && examData.studentPasswords && examData.studentPasswords.length && S.student && S.student.name) {
+    const _normN = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
+    const _alumNorm = _normN(S.student.name);
+    const _match = examData.studentPasswords.find(sp => _normN(sp.nameNorm) === _alumNorm);
+    if (_match) _pwOk = (hash === _match.pwHash);
+  }
+  if (_pwOk) {
     // Incrementar contador de desbloqueos
     S.unlockCount++;
 
@@ -1579,6 +1610,17 @@ async function loadExamFile(input) {
     examData = parsed;
     pwHash = examData.pwHash;
 
+    // Validar ventana de tiempo de disponibilidad
+    const _ahora = new Date();
+    if (examData.meta.validFrom && _ahora < new Date(examData.meta.validFrom)) {
+      const _d = new Date(examData.meta.validFrom);
+      throw new Error(`Examen no disponible aún. Disponible desde: ${_d.toLocaleString('es',{dateStyle:'short',timeStyle:'short'})}`);
+    }
+    if (examData.meta.validUntil && _ahora > new Date(examData.meta.validUntil)) {
+      const _d = new Date(examData.meta.validUntil);
+      throw new Error(`Examen expirado. Estaba disponible hasta: ${_d.toLocaleString('es',{dateStyle:'short',timeStyle:'short'})}`);
+    }
+
     // Verificar si hay estado guardado del mismo examen
     if (loadState() && S.examId === examData.meta.name) {
       // Continuar examen guardado
@@ -1643,6 +1685,10 @@ function screenInfo() {
       ${meta.duration ? `<span><strong>Tiempo límite:</strong> ${meta.duration} min</span>` : ''}
     </div>
     ${meta.teacher ? `<div class="meta" style="margin-top:.2rem"><strong>Docente:</strong> ${esc(meta.teacher)}</div>` : ''}
+    ${(meta.validFrom || meta.validUntil) ? `<div class="meta" style="margin-top:.2rem;font-size:.8rem;color:var(--text2)">
+      ${meta.validFrom ? `<span>&#128337; <strong>Desde:</strong> ${new Date(meta.validFrom).toLocaleString('es',{dateStyle:'short',timeStyle:'short'})}</span>` : ''}
+      ${meta.validUntil ? `<span>&#128337; <strong>Hasta:</strong> ${new Date(meta.validUntil).toLocaleString('es',{dateStyle:'short',timeStyle:'short'})}</span>` : ''}
+    </div>` : ''}
   </div>
 
   <div class="card">
@@ -2370,7 +2416,7 @@ function evaluateExam() {
 
   render();
   // Subir resultado a la nube automáticamente al finalizar
-  setTimeout(() => uploadResultsToCloud(), 400);
+  setTimeout(() => subirResultadoFirestore(), 400);
 }
 
 // ═══════════════════════════════════════
@@ -2822,6 +2868,114 @@ const SINONIMOS = {
   'mientras': ['en tanto', 'al tiempo que', 'durante'],
   'segun': ['de acuerdo con', 'conforme a', 'como dice'],
   'respecto a': ['en cuanto a', 'con relacion a', 'sobre', 'acerca de'],
+  // ═══════════════════════════════════════════════════════════════
+  // CIENCIAS NATURALES
+  // ═══════════════════════════════════════════════════════════════
+  'celula': ['unidad basica', 'unidad fundamental', 'unidad celular'],
+  'fotosintesis': ['proceso fotosintetico', 'sintesis de alimentos', 'fijacion de carbono'],
+  'respiracion': ['intercambio gaseoso', 'proceso respiratorio'],
+  'ecosistema': ['sistema ecologico', 'comunidad biologica', 'bioma'],
+  'organismo': ['ser vivo', 'ser viviente', 'ente biologico'],
+  'especie': ['tipo biologico', 'clase de organismo'],
+  'evolucion': ['transformacion', 'cambio gradual', 'desarrollo biologico', 'adaptacion'],
+  'genetica': ['herencia', 'herencia biologica', 'ciencia de la herencia'],
+  'adn': ['acido desoxirribonucleico', 'material genetico', 'molecula hereditaria'],
+  'proteina': ['macromolecula', 'compuesto proteico'],
+  'mitosis': ['division celular', 'division equitativa'],
+  'meiosis': ['division reductora', 'division reproductiva'],
+  'atomo': ['unidad basica de la materia', 'particula fundamental'],
+  'molecula': ['compuesto', 'agrupacion de atomos'],
+  'energia': ['fuerza', 'potencia', 'capacidad de trabajo'],
+  'materia': ['sustancia', 'material', 'masa'],
+  'reaccion quimica': ['cambio quimico', 'transformacion quimica', 'proceso quimico'],
+  'solucion': ['disolucion', 'mezcla homogenea'],
+  'gravedad': ['fuerza gravitatoria', 'atraccion gravitacional', 'peso'],
+  'velocidad': ['rapidez', 'celeridad'],
+  'aceleracion': ['cambio de velocidad', 'incremento de rapidez'],
+  'fuerza': ['potencia', 'impulso', 'empuje'],
+  'presion': ['fuerza por area', 'tension'],
+  'temperatura': ['grado de calor', 'medida termica'],
+  'calor': ['energia termica', 'energia calorifica'],
+  'onda': ['vibracion', 'oscilacion', 'perturbacion'],
+  'electricidad': ['corriente electrica', 'energia electrica', 'flujo de electrones'],
+  'magnetismo': ['fuerza magnetica', 'campo magnetico'],
+
+  // ═══════════════════════════════════════════════════════════════
+  // MATEMATICAS
+  // ═══════════════════════════════════════════════════════════════
+  'ecuacion': ['igualdad', 'expresion algebraica', 'formula'],
+  'variable': ['incognita', 'desconocida', 'literal'],
+  'funcion': ['relacion', 'correspondencia', 'aplicacion'],
+  'grafico': ['grafica', 'diagrama', 'representacion grafica', 'curva'],
+  'pendiente': ['inclinacion', 'tasa de cambio', 'gradiente'],
+  'fraccion': ['quebrado', 'cociente', 'razon'],
+  'porcentaje': ['tanto por ciento', 'proporcion', 'tasa'],
+  'proporcion': ['razon', 'relacion', 'cociente'],
+  'area': ['superficie', 'extension', 'region'],
+  'perimetro': ['contorno', 'borde', 'circunferencia'],
+  'volumen': ['capacidad', 'espacio ocupado'],
+  'triangulo': ['poligono de tres lados', 'figura triangular'],
+  'circulo': ['circunferencia', 'figura circular', 'redondel'],
+  'cuadrado': ['rectangulo equilatero', 'cuadrilatero regular'],
+  'angulo': ['abertura', 'esquina', 'vertice angular'],
+  'paralelo': ['equidistante', 'no secante'],
+  'perpendicular': ['ortogonal', 'en angulo recto'],
+  'simetria': ['proporcion', 'equilibrio', 'correspondencia'],
+  'probabilidad': ['posibilidad', 'chance', 'verosimilitud'],
+  'estadistica': ['datos', 'analisis de datos'],
+  'promedio': ['media', 'media aritmetica', 'valor medio'],
+  'mediana': ['valor central', 'valor medio'],
+  'moda': ['valor mas frecuente', 'valor repetido'],
+  'suma': ['adicion', 'total', 'agregado'],
+  'resta': ['sustraccion', 'diferencia'],
+  'multiplicacion': ['producto', 'factor'],
+  'division': ['cociente', 'particion', 'reparto'],
+  'potencia': ['exponenciacion', 'poder'],
+  'raiz': ['radical', 'raiz cuadrada'],
+  'logaritmo': ['exponente inverso'],
+  'derivada': ['tasa de cambio instantanea', 'pendiente de la tangente'],
+  'integral': ['area bajo la curva', 'antiderivada', 'primitiva'],
+
+  // ═══════════════════════════════════════════════════════════════
+  // HISTORIA Y ESTUDIOS SOCIALES
+  // ═══════════════════════════════════════════════════════════════
+  'democracia': ['gobierno del pueblo', 'sistema democratico', 'gobierno representativo'],
+  'dictadura': ['gobierno autoritario', 'regimen totalitario', 'autocracia', 'tirania'],
+  'monarquia': ['reinado', 'gobierno real', 'reino'],
+  'republica': ['estado republicano', 'gobierno sin rey'],
+  'constitucion': ['carta magna', 'ley fundamental', 'norma suprema'],
+  'independencia': ['emancipacion', 'autonomia', 'soberania', 'liberacion'],
+  'colonia': ['territorio colonial', 'posesion'],
+  'colonizacion': ['conquista', 'expansion colonial', 'dominacion'],
+  'revolucion': ['levantamiento', 'sublevacion', 'cambio radical', 'insurreccion'],
+  'guerra': ['conflicto armado', 'conflicto belico', 'contienda'],
+  'tratado': ['acuerdo', 'pacto', 'convenio'],
+  'imperio': ['dominio', 'potencia imperial'],
+  'feudalismo': ['sistema feudal', 'regimen feudal'],
+  'capitalismo': ['sistema capitalista', 'economia de mercado', 'libre mercado'],
+  'socialismo': ['sistema socialista', 'economia planificada'],
+  'comunismo': ['sistema comunista', 'marxismo'],
+  'globalizacion': ['mundializacion', 'interconexion global'],
+  'migracion': ['desplazamiento', 'movimiento migratorio', 'emigracion', 'inmigracion'],
+  'ciudadano': ['habitante', 'poblador', 'nacional'],
+  'derechos humanos': ['derechos fundamentales', 'garantias individuales', 'libertades basicas'],
+  'soberania': ['independencia', 'autodeterminacion', 'poder supremo'],
+  'estado': ['nacion', 'pais', 'gobierno', 'republica'],
+  'gobierno': ['administracion', 'poder ejecutivo', 'autoridad'],
+  'ley': ['norma', 'regla', 'legislacion', 'precepto'],
+  'derecho': ['norma juridica', 'legislacion', 'justicia'],
+  'justicia': ['equidad', 'imparcialidad', 'derecho'],
+  'economia': ['sistema economico', 'actividad economica', 'finanzas'],
+  'comercio': ['intercambio', 'negocio', 'transaccion', 'compraventa'],
+  'industria': ['produccion', 'manufactura', 'fabricacion'],
+  'agricultura': ['cultivo', 'labranza', 'produccion agricola'],
+  'tecnologia': ['tecnica', 'innovacion tecnologica', 'avance tecnico'],
+  'poblacion': ['habitantes', 'gente', 'demografía', 'ciudadanos'],
+  'territorio': ['region', 'zona', 'area geografica', 'tierra'],
+  'frontera': ['limite', 'linea divisoria', 'confin'],
+  'cultura': ['tradicion', 'costumbres', 'patrimonio', 'civilizacion'],
+  'religion': ['fe', 'creencia', 'culto', 'doctrina'],
+  'iglesia': ['templo', 'catedral', 'institucion religiosa'],
 };
 
 // Stemming básico español - reduce palabras a su raíz aproximada
@@ -2829,8 +2983,9 @@ function stemSpanish(word) {
   if (!word || word.length < 4) return word;
 
   let stem = word;
+  const MIN_ROOT = 3; // nunca dejar raíz de menos de 3 chars
 
-  // Sufijos nominales/adjetivales (aplicar primero, del más largo al más corto)
+  // Sufijos nominales/adjetivales (del más largo al más corto)
   const nominalSuffixes = [
     'amiento', 'imiento', 'mente', 'cion', 'sion', 'idad', 'edad',
     'encia', 'ancia', 'ismo', 'ista', 'oso', 'osa', 'ivo', 'iva',
@@ -2848,9 +3003,9 @@ function stemSpanish(word) {
   // Diminutivos/aumentativos
   const dimAumSuffixes = ['illo', 'illa', 'ito', 'ita', 'ote', 'ota', 'azo', 'aza'];
 
-  // Nominal primero
+  // Nominal primero — exigir raíz mínima de MIN_ROOT chars
   for (const suf of nominalSuffixes) {
-    if (stem.endsWith(suf) && stem.length > suf.length + 3) {
+    if (stem.endsWith(suf) && (stem.length - suf.length) >= MIN_ROOT) {
       stem = stem.slice(0, -suf.length);
       break;
     }
@@ -2858,27 +3013,26 @@ function stemSpanish(word) {
 
   // Diminutivos
   for (const suf of dimAumSuffixes) {
-    if (stem.endsWith(suf) && stem.length > suf.length + 3) {
+    if (stem.endsWith(suf) && (stem.length - suf.length) >= MIN_ROOT) {
       stem = stem.slice(0, -suf.length);
       break;
     }
   }
 
-  // Verbal
+  // Verbal — raíz mínima
   for (const suf of verbalSuffixes) {
-    if (stem.endsWith(suf) && stem.length > suf.length + 2) {
+    if (stem.endsWith(suf) && (stem.length - suf.length) >= MIN_ROOT) {
       stem = stem.slice(0, -suf.length);
       break;
     }
   }
 
-  // Plural al final y solo si no es palabra griega/latina en -is/-us/-os
-  // [iuo]s$ cubre virus(-us), cosmos(-os), crisis(-is) pero NO casas(-as) ni nubes(-es)
+  // Plural al final (proteger invariantes griegos/latinos)
   const isInvariant = /[iuo]s$|sis$|lis$|tis$|bis$|xis$/.test(stem);
   if (!isInvariant) {
-    if (stem.endsWith('es') && stem.length > 5) {
+    if (stem.endsWith('es') && (stem.length - 2) >= MIN_ROOT) {
       stem = stem.slice(0, -2);
-    } else if (stem.endsWith('s') && stem.length > 4) {
+    } else if (stem.endsWith('s') && (stem.length - 1) >= MIN_ROOT) {
       stem = stem.slice(0, -1);
     }
   }
@@ -2916,26 +3070,27 @@ function levenshtein(a, b) {
   return matrix[b.length][a.length];
 }
 
-// Buscar sinónimo de una palabra
+// Buscar sinónimos de una palabra — diccionario embebido + stems
+// Se usa un cache para evitar iterar 500+ entradas repetidamente
+const _synCache = new Map();
+
 function findSynonyms(word) {
-  // Normalizar siempre antes de buscar: ambos diccionarios usan claves sin tildes y minúsculas
   const w = (word || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
+  if (!w) return [w];
+  if (_synCache.has(w)) return _synCache.get(w);
+
   const synonyms = new Set([w]);
+  const wStem = stemSpanish(w);
 
-  // 1. WordNet-ES (MCR, ~63k palabras normalizadas)
-  if (window.WN_ES_loaded) {
-    try {
-      for (const syn of window.WN_ES_lookup(w)) synonyms.add(syn);
-    } catch(e) { /* wordnet falló silenciosamente, continúa con SINONIMOS */ }
-  }
-
-  // 2. Diccionario curado (dominio Literatura/Gramática)
+  // 1. Búsqueda directa en SINONIMOS
   if (SINONIMOS[w]) {
     SINONIMOS[w].forEach(s => synonyms.add(s));
   }
+
+  // 2. Búsqueda inversa (la palabra es sinónimo de otra)
   for (const [key, values] of Object.entries(SINONIMOS)) {
     if (values.includes(w)) {
       synonyms.add(key);
@@ -2943,7 +3098,20 @@ function findSynonyms(word) {
     }
   }
 
-  return [...synonyms];
+  // 3. Búsqueda por stem: si el stem de w coincide con el stem de una clave
+  if (synonyms.size <= 1 && w.length >= 4) {
+    for (const [key, values] of Object.entries(SINONIMOS)) {
+      if (stemSpanish(key) === wStem) {
+        synonyms.add(key);
+        values.forEach(v => synonyms.add(v));
+        break; // encontrar una familia basta
+      }
+    }
+  }
+
+  const result = [...synonyms];
+  _synCache.set(w, result);
+  return result;
 }
 
 // Verificar si una palabra coincide con otra (flexible)
@@ -2951,8 +3119,7 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
   const kwStem = stemSpanish(keyword);
   const kwSynonyms = findSynonyms(keyword);
 
-  // 1. Coincidencia exacta — palabra completa (no como subcadena de otra palabra)
-  // Regex con límite de palabra para evitar que "sol" matchee "soltaron"
+  // 1. Coincidencia exacta — palabra completa (word-boundary)
   const kwEscaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const kwWordRe  = new RegExp('(?:^|\\s)' + kwEscaped + '(?=\\s|$)');
   if (kwWordRe.test(fullAnswer)) {
@@ -2960,13 +3127,20 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
   }
 
   // 2. Coincidencia por stem (raíz)
-  // startsWith solo si ambos stems tienen ≥4 chars (evita que 'sol' matchee 'soltaron')
+  // Solo si ambos stems tienen ≥4 chars Y la diferencia de longitud no es excesiva
   for (const word of answerWords) {
     const wordStem = stemSpanish(word);
-    if (kwStem === wordStem ||
-        (kwStem.length >= 4 && wordStem.length >= 4 &&
-         (kwStem.startsWith(wordStem) || wordStem.startsWith(kwStem)))) {
+    if (kwStem === wordStem) {
       return { found: true, type: 'raiz', matched: word };
+    }
+    // startsWith solo si la diferencia de longitud es ≤3 (evita "com" matcheando "comunicar")
+    if (kwStem.length >= 4 && wordStem.length >= 4) {
+      const shorter = Math.min(kwStem.length, wordStem.length);
+      const longer  = Math.max(kwStem.length, wordStem.length);
+      if ((kwStem.startsWith(wordStem) || wordStem.startsWith(kwStem))
+          && (longer - shorter) <= 3) {
+        return { found: true, type: 'raiz', matched: word };
+      }
     }
   }
 
@@ -2989,11 +3163,15 @@ function flexibleMatch(keyword, answerWords, fullAnswer) {
     }
   }
 
-  // 4. Tolerancia a errores tipográficos (1-2 caracteres de diferencia)
+  // 4. Tolerancia a errores tipográficos — proporcional a la longitud
+  // Palabras de 4-5 chars: max 1 error; 6-8: max 2; 9+: max 3
   for (const word of answerWords) {
     if (word.length >= 4 && keyword.length >= 4) {
+      // Solo comparar si las longitudes son similares (±30%)
+      const lenRatio = Math.min(word.length, keyword.length) / Math.max(word.length, keyword.length);
+      if (lenRatio < 0.65) continue;
       const distance = levenshtein(keyword, word);
-      const maxDistance = keyword.length <= 5 ? 1 : 2;
+      const maxDistance = keyword.length <= 5 ? 1 : (keyword.length <= 8 ? 2 : 3);
       if (distance <= maxDistance) {
         return { found: true, type: 'similar', matched: word };
       }
@@ -3790,33 +3968,19 @@ function esc(str) {
 }
 
 // ═══════════════════════════════════════
-// FIREBASE — SUBIDA DE RESULTADOS A LA NUBE
+// FIRESTORE — SUBIDA DE RESULTADOS
 // ═══════════════════════════════════════
-//
-// ╔══════════════════════════════════════════════════╗
-// ║        INSTRUCCIONES DE CONFIGURACIÓN           ║
-// ╠══════════════════════════════════════════════════╣
-// ║  1. Ve a https://console.firebase.google.com/   ║
-// ║  2. Crea un NUEVO proyecto (gratis)             ║
-// ║  3. Compilación → Realtime Database → Crear     ║
-// ║  4. Elige "Empezar en modo de prueba"           ║
-// ║  5. Copia la URL (termina en .firebaseio.com)   ║
-// ║  6. Pégala en databaseURL abajo y guarda        ║
-// ╚══════════════════════════════════════════════════╝
 
-const FIREBASE_CONFIG = {
-  databaseURL: 'https://examen-fc29f-default-rtdb.firebaseio.com',
-  collection: 'resultados_examenes',
-  enabled: false,    // Se activa automáticamente si databaseURL es válida
+const FIRESTORE_CONFIG = {
+  apiKey: "AIzaSyDnBvyp2ucop8TfXYHfAPT6N8iB_5kB0lU",
+  authDomain: "sistema-de-gestion-docen-e245d.firebaseapp.com",
+  projectId: "sistema-de-gestion-docen-e245d",
+  storageBucket: "sistema-de-gestion-docen-e245d.firebasestorage.app",
+  messagingSenderId: "656847195915",
+  appId: "1:656847195915:web:095f2a5bca78b801895c0e"
 };
-
-// Activar si la URL está configurada
-if (FIREBASE_CONFIG.databaseURL && FIREBASE_CONFIG.databaseURL.includes('.firebaseio.com')) {
-  FIREBASE_CONFIG.enabled = true;
-  console.log('[CLOUD] ✅ Firebase listo —', FIREBASE_CONFIG.databaseURL);
-} else {
-  console.info('[CLOUD] Firebase no configurado. Los resultados se guardan localmente.');
-}
+if (!firebase.apps.length) firebase.initializeApp(FIRESTORE_CONFIG);
+const _firestoreDB = firebase.firestore();
 
 // ── Construir payload completo del resultado ──
 function buildResultPayload() {
@@ -3856,22 +4020,29 @@ function buildResultPayload() {
       desbloqueos:  S.unlockCount || 0,
       dispositivo:  DEVICE.platform || 'unknown',
       esMobile:     DEVICE.isMobile || false,
-      logIncidentes: (S.warningLog || []).slice(-20),
+      metricasMovil: DEVICE.isMobile ? {
+        timeOutOfApp:      Math.round(MOBILE_METRICS.timeOutOfApp / 1000),
+        orientationChanges: MOBILE_METRICS.orientationChanges,
+        suspiciousEvents:   MOBILE_METRICS.suspiciousEvents,
+      } : null,
+      logIncidentes: (S.warningLog || []),
       // Anti-IA data
-      salidasDeApp:        S.exitCount          || 0,
-      penalizacionSegundos: S.timePenaltyTotal  || 0,
-      intentosDePaste:     (S.pasteEvents || []).length,
+      salidasDeApp:          S.exitCount          || 0,
+      penalizacionSegundos:  S.timePenaltyTotal   || 0,
+      intentosDePaste:       (S.pasteEvents || []).length,
       respuestasSospechosas: (S.suspiciousAnswers || []).length,
-      detallesPaste:       (S.pasteEvents || []).slice(-10),
-      detallesSospechosas: (S.suspiciousAnswers || []).slice(-20),
+      detallesPaste:         (S.pasteEvents || []),
+      detallesSospechosas:   (S.suspiciousAnswers || []),
     },
     preguntas: (r.questions || []).map((q, i) => ({
-      numero:     i + 1,
-      tipo:       q.type          || 'open',
-      puntos:     q.earnedPoints  || 0,
-      maxPuntos:  q.maxPoints     || 1,
-      respondida: !!(q.studentAnswer && q.studentAnswer.trim()),
-      feedback:   q.feedback      || '',
+      numero:           i + 1,
+      tipo:             q.type          || 'open',
+      puntos:           q.earnedPoints  || 0,
+      maxPuntos:        q.maxPoints     || 1,
+      respondida:       !!(q.studentAnswer && q.studentAnswer.trim()),
+      feedback:         q.feedback      || '',
+      respuestaAlumno:  q.studentAnswer ? String(q.studentAnswer).substring(0, 500) : '',
+      respuestaCorrecta: q.correctAnswer ? String(q.correctAnswer).substring(0, 300) : '',
       sospechosa: (S.suspiciousAnswers || []).some(sa => sa.qId == (q.id !== undefined ? q.id : i)),
       tuvoPaste:  (S.pasteEvents || []).some(pe => pe.qId == (q.id !== undefined ? q.id : i)),
     })),
@@ -3884,12 +4055,8 @@ function buildResultPayload() {
   };
 }
 
-// ── Subir resultado a Firebase Realtime Database (REST API) ──
-async function uploadResultsToCloud() {
-  if (!FIREBASE_CONFIG.enabled) {
-    S.cloudStatus = 'disabled';
-    return;
-  }
+// ── Subir resultado a Firestore ──
+async function subirResultadoFirestore() {
   if (!S.results || !S.student || !S.student.name) {
     console.warn('[CLOUD] Sin resultados para subir.');
     return;
@@ -3903,46 +4070,39 @@ async function uploadResultsToCloud() {
 
   try {
     const payload = buildResultPayload();
+    const nombreNorm = (S.student.name || 'alumno').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').slice(0,40);
+    const examenNorm = (payload.examen.nombre || 'examen').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').slice(0,40);
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    const docId = `${examenNorm}__${ts}__${nombreNorm}`;
 
-    // Clave única: timestamp + examen + alumno
-    const now     = new Date();
-    const dateStr = now.toISOString().replace(/[:.]/g, '-').substring(0, 19);
-    const norm    = s => (s || '').normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '_');
-    const safeExam = norm(payload.examen.nombre).substring(0, 25);
-    const safeName = norm(payload.alumno.nombre).substring(0, 25);
-    const key      = `${dateStr}__${safeName}`;
-
-    // PUT a Firebase REST API
-    const base = FIREBASE_CONFIG.databaseURL.replace(/\/$/, '');
-    const url  = `${base}/${FIREBASE_CONFIG.collection}/${safeExam}/${key}.json`;
-
-    const res  = await fetch(url, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ ...payload, _key: key }),
+    await _firestoreDB.collection('resultadosExamen').doc(docId).set({
+      ...payload,
+      estado: 'pendiente',
+      alumnoId: null,
+      seccionId: null,
+      actividadId: null,
+      importadoEn: null,
+      subidoEn: firebase.firestore.FieldValue.serverTimestamp()
     });
-
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} — ${txt.substring(0, 120)}`);
-    }
 
     S.cloudStatus     = 'success';
     S._cloudRetries   = 0;
-    S.cloudUploadedAt = now.toISOString();
-    S.cloudKey        = key;
-    console.log('[CLOUD] ✅ Resultado subido:', key);
+    S.cloudUploadedAt = new Date().toISOString();
+    S.cloudKey        = docId;
+    console.log('[CLOUD] ✅ Resultado subido a Firestore:', docId);
 
   } catch (err) {
     if (S._cloudRetries === undefined) S._cloudRetries = 0;
     if (S._cloudRetries < 3) {
       S._cloudRetries++;
       console.log(`[CLOUD] Reintentando en 3s... (Intento ${S._cloudRetries}/3)`);
-      setTimeout(uploadResultsToCloud, 3000);
-      return; // Esperar al reintento activo
+      setTimeout(subirResultadoFirestore, 3000);
+      return;
     }
-    
     S.cloudStatus = 'error';
     S.cloudError  = err.message;
     console.error('[CLOUD] ❌ Error al subir tras reintentos:', err.message);
@@ -3955,7 +4115,8 @@ async function uploadResultsToCloud() {
 // ── Reintentar subida manualmente ──
 async function retryCloudUpload() {
   S.cloudStatus = null;
-  await uploadResultsToCloud();
+  S._cloudRetries = 0;
+  await subirResultadoFirestore();
 }
 
 // ── Actualizar el banner sin re-renderizar toda la pantalla ──
@@ -3966,7 +4127,6 @@ function updateCloudStatusUI() {
 
 // ── HTML del banner de estado de nube ──
 function cloudStatusHTML() {
-  if (!FIREBASE_CONFIG.enabled) return '';
   const s = S.cloudStatus;
 
   if (s === 'uploading') return `
@@ -3999,7 +4159,7 @@ function cloudStatusHTML() {
       <span style="font-size:1.5rem;flex-shrink:0">☁️</span>
       <div style="flex:1">
         <div style="font-size:.85rem;font-weight:bold;color:#dc2626">No se pudo enviar a la nube</div>
-        <div style="font-size:.75rem;color:#ef4444">Sin conexión o Firebase no configurado. Descarga el resultado manualmente.</div>
+        <div style="font-size:.75rem;color:#ef4444">Sin conexión. El docente puede pedir el resultado manualmente.</div>
       </div>
       <button onclick="retryCloudUpload()"
         style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:.4rem .9rem;
@@ -4014,8 +4174,27 @@ function cloudStatusHTML() {
 // ═══════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════
-// Cargar logo
-document.getElementById('logoImg').src = 'data:image/jpeg;base64,' + LOGO_INSA;
+// ─── Integración GestINSA: ocultar navegación durante examen ───────────────
+// Cuando el examen empieza (phase='exam'), se ocultan los botones de nav
+// para evitar escape fácil. Se muestran de vuelta al finalizar (phase='results').
+(function() {
+  const backBtn  = document.getElementById('hdr-back-btn');
+  const crearBtn = document.getElementById('hdr-crear-btn');
+  function syncNavVisibility() {
+    const inExam = S.phase === 'exam';
+    if (backBtn)  backBtn.style.display  = inExam ? 'none' : '';
+    if (crearBtn) crearBtn.style.display = inExam ? 'none' : '';
+  }
+  // Parchear render() para sincronizar después de cada render
+  const _origRender = window.render;
+  if (typeof _origRender === 'function') {
+    window.render = function() { _origRender.apply(this, arguments); syncNavVisibility(); };
+  }
+  syncNavVisibility();
+})();
+
+// Logo img ya no existe en el nuevo header — evitar error
+try { if (document.getElementById('logoImg')) document.getElementById('logoImg').remove(); } catch(e) {}
 
 initSecurity();
 render();
